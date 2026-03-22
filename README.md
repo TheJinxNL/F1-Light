@@ -4,6 +4,8 @@ A live-connected ESP32 project that tracks the **official F1 Live Timing feed** 
 - An 18-LED WS2812B strip animates the current track status (green / yellow / safety car / VSC / red flag)
 - A 1.9″ ST7789 TFT display shows the upcoming race schedule, live timing, and championship standings
 
+Based on the original 3D design of Julian F: https://makerworld.com/en/models/1624039-formula-1-lamp-stand#profileId-1714575
+
 ---
 ![f1light](https://github.com/user-attachments/assets/a0cf1643-0b6c-4ca5-85f3-e863da392c33)
 

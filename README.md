@@ -5,6 +5,7 @@ A live-connected ESP32 project that tracks the **official F1 Live Timing feed** 
 - A 1.9″ ST7789 TFT display shows the upcoming race schedule, live timing, and championship standings
 
 ---
+![f1light](https://github.com/user-attachments/assets/a0cf1643-0b6c-4ca5-85f3-e863da392c33)
 
 ## Features
 

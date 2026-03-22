@@ -1,0 +1,192 @@
+/**
+ * F1_Light.ino
+ * ─────────────────────────────────────────────────────────────────────────────
+ * ESP32-based F1-style LED light bar + TFT display controller.
+ * Connects to the F1 live-timing SignalR feed and shows track status on
+ * WS2812B LEDs and session data on a 170×320 ST7789 display.
+ * ─────────────────────────────────────────────────────────────────────────────
+ */
+
+#include <FastLED.h>
+#include "config.h"
+#include "effects.h"
+#include "display.h"
+#include "f1_live.h"
+
+// ─── LED array (shared with effects.cpp via extern) ───────────────────────────
+CRGB leds[NUM_LEDS];
+
+// ─── Idle view alternation ────────────────────────────────────────────────────
+#define IDLE_VIEW_SWITCH_MS  10000UL   // switch between schedule / standings every 10 s
+#define COUNTDOWN_WINDOW_SEC 300       // show countdown in the 5 min before a session
+
+static F1State     s_prevState        = F1State::WIFI_CONNECTING;
+static TrackStatus s_prevStatus       = TrackStatus::UNKNOWN;
+static uint8_t     s_idleView         = 0;   // 0 = schedule, 1 = championship
+static uint32_t    s_lastViewSwitchMs = 0;
+static bool        s_inCountdown      = false;
+static uint32_t    s_lastCountdownMs  = 0;
+
+// ─── setup() ──────────────────────────────────────────────────────────────────
+void setup() {
+  Serial.begin(115200);
+  Serial.println("F1 Light — booting…");
+
+  FastLED.addLeds<LED_TYPE, LED_PIN, COLOR_ORDER>(leds, NUM_LEDS)
+         .setCorrection(TypicalLEDStrip);
+  FastLED.setBrightness(MAX_BRIGHTNESS);
+  FastLED.clear(true);
+
+  displayBegin();
+  f1LiveBegin();
+}
+
+// ─── loop() ───────────────────────────────────────────────────────────────────
+void loop() {
+  f1LiveLoop();
+
+  F1State     state  = f1GetState();
+  TrackStatus status = f1GetTrackStatus();
+  bool stateChanged  = (state != s_prevState);
+  s_prevState        = state;
+
+  // ── State-transition actions ──────────────────────────────────────────────
+  if (stateChanged) {
+    switch (state) {
+      case F1State::WIFI_CONNECTING:
+      case F1State::NTP_SYNC:
+        displayShowConnecting();
+        break;
+
+      case F1State::IDLE:
+        effectIdleReset();
+        displaySetBrightness(TFT_BL_DEFAULT);
+        s_idleView         = 0;
+        s_lastViewSwitchMs = millis();
+        s_inCountdown      = false;
+        resetDriverData();
+        displayShowIdle();  // always draw — function shows "No upcoming sessions" if empty
+        break;
+
+      case F1State::CONNECTING:
+      case F1State::RECONNECTING:
+        displayShowConnecting();
+        break;
+
+      case F1State::LIVE:
+        displaySetBrightness(230);
+        s_inCountdown = false;
+        switch (g_sessionType) {
+          case SessionType::QUALIFYING:
+          case SessionType::SPRINT_QUALIFYING:
+            displayShowQualifying(status); break;
+          case SessionType::RACE:
+          case SessionType::SPRINT:
+            displayShowRace(status);       break;
+          default:
+            displayShowLive(status);       break;
+        }
+        break;
+    }
+  }
+
+  // ── Continuous per-state actions ─────────────────────────────────────────
+  switch (state) {
+    // ── IDLE ────────────────────────────────────────────────────────────────
+    case F1State::IDLE: {
+      effectIdle();
+
+      // Countdown: if the first upcoming session starts within 5 minutes, show
+      // the countdown screen and suppress the view alternation timer.
+      if (g_upcomingCount > 0) {
+        time_t nowTs   = time(nullptr);
+        long   secsTo  = (long)(g_upcomingSessions[0].startUtc - nowTs);
+        bool   wantCd  = (secsTo >= 0 && secsTo <= COUNTDOWN_WINDOW_SEC);
+
+        if (wantCd && !s_inCountdown) {
+          // Entering countdown
+          s_inCountdown     = true;
+          s_lastCountdownMs = 0;  // force immediate draw
+        } else if (!wantCd && s_inCountdown) {
+          // Leaving countdown — fall back to schedule
+          s_inCountdown = false;
+          s_idleView    = 0;
+          displayShowIdle();
+        }
+
+        if (s_inCountdown) {
+          // Redraw countdown every second
+          uint32_t nowMs = millis();
+          if (nowMs - s_lastCountdownMs >= 1000) {
+            s_lastCountdownMs = nowMs;
+            time_t nowTs2 = time(nullptr);
+            int32_t secs = (int32_t)(g_upcomingSessions[0].startUtc - nowTs2);
+            if (secs < 0) secs = 0;
+            displayShowCountdown(secs, g_upcomingSessions[0].sessionName);
+          }
+          break;  // skip view alternation while in countdown
+        }
+      }
+
+      // View alternation: schedule ↔ championship every IDLE_VIEW_SWITCH_MS
+      if (millis() - s_lastViewSwitchMs >= IDLE_VIEW_SWITCH_MS) {
+        s_lastViewSwitchMs = millis();
+        s_idleView = (s_idleView == 0) ? 1 : 0;
+        if (s_idleView == 0) {
+          displayShowIdle();  // handles empty state internally ("No upcoming sessions")
+        } else {
+          if (g_champCount > 0) displayShowChampionship();
+          else                  displayShowIdle();  // no standings yet — stay on schedule
+        }
+      }
+
+      // Callbacks from f1_live: schedule refresh
+      if (f1ScheduleRefreshed()) {
+        s_idleView         = 0;
+        s_lastViewSwitchMs = millis();
+        displayShowIdle();  // always redraw — handles empty state internally
+      }
+
+      // Championship standings updated while displaying them
+      if (f1ChampRefreshed() && s_idleView == 1 && !s_inCountdown) {
+        displayShowChampionship();
+      }
+      break;
+    }
+
+    // ── CONNECTING / RECONNECTING ────────────────────────────────────────────
+    case F1State::CONNECTING:
+    case F1State::RECONNECTING:
+      effectConnectingSignalR();
+      break;
+
+    // ── LIVE ─────────────────────────────────────────────────────────────────
+    case F1State::LIVE: {
+      effectTrackStatus(status);
+
+      // Redraw display when timing data or track status changes
+      bool statusChanged = (status != s_prevStatus);
+      s_prevStatus       = status;
+
+      if (f1TimingRefreshed() || statusChanged) {
+        switch (g_sessionType) {
+          case SessionType::QUALIFYING:
+          case SessionType::SPRINT_QUALIFYING:
+            displayShowQualifying(status); break;
+          case SessionType::RACE:
+          case SessionType::SPRINT:
+            displayShowRace(status);       break;
+          default:
+            displayShowLive(status);       break;
+        }
+      }
+      break;
+    }
+
+    // ── WIFI / NTP ───────────────────────────────────────────────────────────
+    case F1State::WIFI_CONNECTING:
+    case F1State::NTP_SYNC:
+      effectConnecting();
+      break;
+  }
+}

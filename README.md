@@ -200,6 +200,7 @@ Track status codes received over the feed:
 ---
 
 ## Used Links
+- Original F1 Light 3D files: https://makerworld.com/en/models/1624039-formula-1-lamp-stand
 - F1 Font: https://www.onlinewebfonts.com/download/7a45cffcf1eee0797d566deb425ebaa9
 - Convert Fonts to C: https://rop.nl/truetype2gfx/
 - RGB565 Converter: https://marlinfw.org/tools/rgb565/converter.html

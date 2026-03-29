@@ -22,6 +22,7 @@ enum class F1State : uint8_t {
   CONNECTING,        // Session window open; connecting to SignalR
   LIVE,              // Connected and receiving track status
   RECONNECTING,      // Lost connection; back-off retry in progress
+  SESSION_ENDED,     // Session just finished — brief celebration before IDLE
 };
 
 // ─── Session schedule (populated after every Index.json poll) ─────────────────
@@ -38,38 +39,6 @@ extern uint8_t     g_upcomingCount;
 
 /** Upcoming sessions sorted by start time (future sessions from nearest meeting). */
 extern SessionInfo g_upcomingSessions[MAX_UPCOMING_SESSIONS];
-// ─── Session type ──────────────────────────────────────────────────────────────────
-enum class SessionType : uint8_t {
-  UNKNOWN           = 0,
-  PRACTICE          = 1,
-  QUALIFYING        = 2,
-  SPRINT_QUALIFYING = 3,
-  SPRINT            = 4,
-  RACE              = 5,
-};
-
-// ─── Live timing data (updated from TimingData + DriverList feeds) ───────────────
-#define MAX_DRIVERS 20
-
-struct DriverTiming {
-  char    racingNumber[4];   // "1", "44"
-  char    tla[4];            // "VER", "HAM" (from DriverList feed)
-  uint8_t position;          // 1-based; 99 = not yet known
-  char    bestLap[12];       // best lap time (qualifying)
-  char    lastLap[12];       // last completed lap (race leader display)
-  char    interval[12];      // gap to car ahead; leader = ""
-  bool    inPit;
-  bool    knockedOut;        // qualifying: eliminated in Q1/Q2
-};
-
-extern SessionType  g_sessionType;
-extern char         g_qualStage[4];       // "Q1", "Q2", "Q3"
-extern char         g_remainingTime[12];  // "01:23:45" from ExtrapolatedClock
-extern uint8_t      g_currentLap;
-extern uint8_t      g_totalLaps;
-extern uint8_t      g_driverCount;
-extern DriverTiming g_drivers[MAX_DRIVERS];
-
 // ─── Championship standings (fetched from Jolpica API while idle) ─────────────
 #define MAX_CHAMP_ENTRIES 6
 
@@ -82,10 +51,6 @@ struct ChampEntry {
 extern uint8_t    g_champCount;
 extern ChampEntry g_champStandings[MAX_CHAMP_ENTRIES];
 
-/** Returns true once after timing data has been updated. Clears on read. */
-bool f1TimingRefreshed();
-/** Zero all timing globals — call when leaving LIVE state. */
-void resetDriverData();
 /** Returns true once after championship standings have been refreshed. Clears on read. */
 bool f1ChampRefreshed();
 // ─── Public API ───────────────────────────────────────────────────────────────

@@ -64,28 +64,29 @@ void loop() {
         s_idleView         = 0;
         s_lastViewSwitchMs = millis();
         s_inCountdown      = false;
-        resetDriverData();
         displayShowIdle();  // always draw — function shows "No upcoming sessions" if empty
         break;
 
       case F1State::CONNECTING:
       case F1State::RECONNECTING:
-        displayShowConnecting();
+        // Only show the connecting screen on first-ever connect (no track status yet).
+        // On a reconnect from LIVE state, keep the last track status visible instead.
+        if (status == TrackStatus::UNKNOWN)
+          displayShowConnecting();
         break;
 
       case F1State::LIVE:
         displaySetBrightness(230);
         s_inCountdown = false;
-        switch (g_sessionType) {
-          case SessionType::QUALIFYING:
-          case SessionType::SPRINT_QUALIFYING:
-            displayShowQualifying(status); break;
-          case SessionType::RACE:
-          case SessionType::SPRINT:
-            displayShowRace(status);       break;
-          default:
-            displayShowLive(status);       break;
-        }
+        displayShowLive(status);
+        break;
+
+      case F1State::SESSION_ENDED:
+        // Blocking celebration: chequered LED sweep + finished screen.
+        // f1_live.cpp advances to IDLE on the very next f1LiveLoop() call,
+        // so this runs for exactly one stateChanged pass.
+        displayShowFinished();
+        effectSessionFinished();
         break;
     }
   }
@@ -147,9 +148,12 @@ void loop() {
         displayShowIdle();  // always redraw — handles empty state internally
       }
 
-      // Championship standings updated while displaying them
-      if (f1ChampRefreshed() && s_idleView == 1 && !s_inCountdown) {
-        displayShowChampionship();
+      // Championship standings updated — always redraw next time the champ
+      // view is shown; if already on it, update immediately.
+      if (f1ChampRefreshed()) {
+        if (s_idleView == 1 && !s_inCountdown)
+          displayShowChampionship();
+        // else: standings cached in g_champStandings, drawn on next view switch
       }
       break;
     }
@@ -157,32 +161,30 @@ void loop() {
     // ── CONNECTING / RECONNECTING ────────────────────────────────────────────
     case F1State::CONNECTING:
     case F1State::RECONNECTING:
-      effectConnectingSignalR();
+      // If we have a prior track status, keep its LED effect running so the
+      // strip stays live-looking during a reconnect.  Only fall back to the
+      // blue breathing animation on the very first connect (no status yet).
+      if (status != TrackStatus::UNKNOWN)
+        effectTrackStatus(status);
+      else
+        effectConnectingSignalR();
       break;
 
     // ── LIVE ─────────────────────────────────────────────────────────────────
     case F1State::LIVE: {
       effectTrackStatus(status);
 
-      // Redraw display when timing data or track status changes
+      // Only redraw when track status changes
       bool statusChanged = (status != s_prevStatus);
       s_prevStatus       = status;
-
-      if (f1TimingRefreshed() || statusChanged) {
-        switch (g_sessionType) {
-          case SessionType::QUALIFYING:
-          case SessionType::SPRINT_QUALIFYING:
-            displayShowQualifying(status); break;
-          case SessionType::RACE:
-          case SessionType::SPRINT:
-            displayShowRace(status);       break;
-          default:
-            displayShowLive(status);       break;
-        }
-      }
+      if (statusChanged) displayShowLive(status);
       break;
     }
-
+    // ── SESSION_ENDED ────────────────────────────────────────────────────────────
+    case F1State::SESSION_ENDED:
+      // Animation played in stateChanged block; continuous case is a no-op.
+      // f1LiveLoop() immediately advances to IDLE on the next call.
+      break;
     // ── WIFI / NTP ───────────────────────────────────────────────────────────
     case F1State::WIFI_CONNECTING:
     case F1State::NTP_SYNC:

@@ -37,6 +37,9 @@ void displayShowIdle();
  */
 void displayShowLive(TrackStatus status);
 
+/** Chequered-flag "FINISHED" screen — shown when a session ends. */
+void displayShowFinished();
+
 /**
  * Countdown overlay — replaces the bottom of the idle screen with a live
  * MM:SS counter. Redraws only the counter area each second so there's no flicker.
@@ -48,22 +51,6 @@ void displayShowCountdown(int32_t secsRemaining, const char* sessionName);
 
 /** Clear the countdown banner (call when countdown ends or state changes). */
 void displayCountdownReset();
-
-/**
- * Live qualifying screen.
- * Shows track-status header, current Q stage + remaining time,
- * then top-10 drivers sorted by position with TLA and best lap.
- * Reads from g_qualStage, g_remainingTime, g_driverCount, g_drivers[].
- */
-void displayShowQualifying(TrackStatus status);
-
-/**
- * Live race / sprint screen.
- * Shows track-status header with current lap, then top-10 drivers
- * with TLA and gap to car ahead (leader shows last lap time).
- * Reads from g_currentLap, g_totalLaps, g_driverCount, g_drivers[].
- */
-void displayShowRace(TrackStatus status);
 
 /**
  * Championship standings screen (idle alternating view).

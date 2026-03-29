@@ -2,7 +2,7 @@
 
 A live-connected ESP32 project that tracks the **official F1 Live Timing feed** and reacts in real time:
 - An 18-LED WS2812B strip animates the current track status (green / yellow / safety car / VSC / red flag)
-- A 1.9″ ST7789 TFT display shows the upcoming race schedule, live timing, and championship standings
+- A 1.9″ ST7789 TFT display shows the upcoming race schedule, live track status, and championship standings
 
 Based on the original 3D design of Julian F: https://makerworld.com/en/models/1624039-formula-1-lamp-stand#profileId-1714575
 Inspiration on how to access the F1 Live Feeds: https://github.com/Nicxe/f1_sensor
@@ -14,9 +14,9 @@ Inspiration on how to access the F1 Live Feeds: https://github.com/Nicxe/f1_sens
 
 - **Live track status** via the official F1 SignalR feed — no third-party API key needed
 - **LED effects** for every flag condition: Green, Yellow, Safety Car, VSC, Red Flag
+- **Session-end celebration** — chequered flag LED sweep + "FINISHED" screen when a session ends
+- **Reconnect resilience** — display and LEDs hold the last known track status during a SignalR reconnect
 - **Upcoming screen** — next race name, up to 3 sessions with local times; alternates every 10 s with the standings screen
-- **Live qualifying screen** — Q stage, time remaining, top 10 with best lap times; knocked-out drivers shown in grey
-- **Live race screen** — current lap, top 10 with gaps/intervals
 - **Championship standings screen** — top 6 drivers with position badge, code, and points; fetched from the Ergast mirror
 - **5-minute countdown** before each session
 - **WiFiManager** — configure WiFi from your phone on first boot; credentials saved to flash
@@ -73,7 +73,7 @@ Hold **GPIO 0** (the built-in BOOT button on most DevKits) while powering on to 
 F1_Light/
 ├── F1_Light.ino                        — Main sketch: setup(), loop(), state/display wiring
 ├── config.h                            — All hardware pins, timing, and colour constants
-├── f1_live.h                           — Public API + shared types (TrackStatus, F1State, SessionInfo)
+├── f1_live.h                           — Public API + shared types (TrackStatus, F1State, SessionInfo, ChampEntry)
 ├── f1_live.cpp                         — WiFi, NTP, Index.json polling, SignalR WebSocket FSM
 ├── effects.h                           — LED effect declarations
 ├── effects.cpp                         — LED effect implementations (non-blocking, millis-based)
@@ -139,6 +139,7 @@ Open **Serial Monitor** at **115200 baud** to see connection progress, parsed se
 | 🚗 Safety Car | Alternating blue/yellow chase |
 | 🟠 VSC | Slow orange pulse |
 | 🔴 Red flag | Rapid red flash |
+| 🏁 Session finished | Chequered sweep → 3× white flash → fade (~3 s) |
 
 ---
 
@@ -151,9 +152,8 @@ Open **Serial Monitor** at **115200 baud** to see connection progress, parsed se
 | Idle — schedule | F1 logo header + next race name + up to 3 upcoming sessions with local times |
 | Idle — standings | F1 logo header + top 6 driver championship standings |
 | 5-min countdown | Session name + large countdown timer |
-| Live — qualifying | Coloured header with Q stage + time remaining + top 10 with best lap times |
-| Live — race / sprint | Coloured header with lap counter + top 10 with gaps |
-| Live — other | Full-screen flag-colour background + large status text |
+| Live | Full-screen flag-colour background + large status text (all session types) |
+| Session finished | Chequered flag pattern + "FINISHED" text |
 
 ---
 

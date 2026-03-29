@@ -182,6 +182,39 @@ void effectTrackStatus(TrackStatus status) {
   }
 }
 
+// ─── Session-end chequered-flag celebration (blocking, ~3 s) ────────────────────
+
+void effectSessionFinished() {
+  // Phase 1: chequered sweep — alternating white/off pattern shifts right
+  // 12 sweeps × 80 ms = ~960 ms
+  for (uint8_t sweep = 0; sweep < 12; sweep++) {
+    for (uint8_t i = 0; i < NUM_LEDS; i++) {
+      // XOR phase bit with sweep index so the pattern shifts each cycle
+      leds[i] = ((i + sweep) % 2 == 0) ? CRGB::White : CRGB::Black;
+    }
+    FastLED.show();
+    delay(80);
+  }
+
+  // Phase 2: three white flashes
+  for (uint8_t f = 0; f < 3; f++) {
+    fill_solid(leds, NUM_LEDS, CRGB::White);
+    FastLED.show();
+    delay(350);
+    FastLED.clear(false);
+    FastLED.show();
+    delay(150);
+  }
+
+  // Phase 3: slow fade to black
+  for (int16_t b = 255; b >= 0; b -= 5) {
+    fill_solid(leds, NUM_LEDS, CRGB(b, b, b));
+    FastLED.show();
+    delay(10);
+  }
+  FastLED.clear(true);
+}
+
 // ─── F1 Race Start Sequence (blocking, demo / startup) ───────────────────────
 
 void raceStartSequence() {

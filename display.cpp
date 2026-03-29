@@ -466,6 +466,25 @@ void displayShowLive(TrackStatus status) {
   }
 }
 
+void displayShowFinished() {
+  // Chequered flag style: alternating black/white 20-px columns
+  const int16_t SQ = 20;  // square size
+  for (int16_t x = 0; x < TFT_WIDTH; x += SQ) {
+    for (int16_t y = 0; y < TFT_HEIGHT; y += SQ) {
+      bool white = (((x / SQ) + (y / SQ)) % 2 == 0);
+      g_tft.fillRect(x, y, SQ, SQ, white ? COL_WHITE : COL_BG);
+    }
+  }
+
+  // "FINISHED" centred, large, in red
+  g_tft.setFont(&Formula1_Display_Regular11pt7b);
+  g_tft.setTextSize(2);
+  g_tft.setTextColor(COL_RED);
+  printCentred("FINISHED", TFT_HEIGHT / 2 - 8);
+  g_tft.setFont(nullptr);
+  g_tft.setTextSize(1);
+}
+
 // File-scope flag: true while a countdown is in progress.
 // Cleared by displayCountdownReset() so the banner redraws on re-entry.
 static bool s_countdownActive = false;
@@ -517,239 +536,6 @@ void displayShowCountdown(int32_t secsRemaining, const char* sessionName) {
 void displayCountdownReset() {
   s_countdownActive = false;  // forces banner redraw on next countdown entry
   g_tft.fillRect(0, TFT_HEIGHT - 68, TFT_WIDTH, 68, COL_BG);
-}
-
-// ─── Shared helpers for live timing screens ───────────────────────────────────
-
-/** Return background and foreground colours for a given track status. */
-static void statusBgFg(TrackStatus status, uint16_t& bg, uint16_t& fg) {
-  switch (status) {
-    case TrackStatus::CLEAR:
-    case TrackStatus::VSC_END: bg = COL_GREEN;  fg = COL_BG;    return;
-    case TrackStatus::YELLOW:
-    case TrackStatus::SC:      bg = COL_YELLOW; fg = COL_BG;    return;
-    case TrackStatus::VSC:     bg = COL_ORANGE; fg = COL_BG;    return;
-    case TrackStatus::RED:     bg = COL_RED;    fg = COL_WHITE; return;
-    default:                   bg = COL_DGRAY;  fg = COL_WHITE; return;
-  }
-}
-
-/** Short status label for the timing header. */
-static const char* statusLabel(TrackStatus status) {
-  switch (status) {
-    case TrackStatus::CLEAR:   return "CLR";
-    case TrackStatus::YELLOW:  return "YEL";
-    case TrackStatus::SC:      return "SC ";
-    case TrackStatus::VSC:     return "VSC";
-    case TrackStatus::VSC_END: return "CLR";
-    case TrackStatus::RED:     return "RED";
-    default:                   return "---";
-  }
-}
-
-// Sorted index list (filled by sortDriversByPosition)
-static uint8_t s_sortedIdx[MAX_DRIVERS];
-
-static void sortDriversByPosition(uint8_t count) {
-  for (uint8_t i = 0; i < count; i++) s_sortedIdx[i] = i;
-  // Insertion sort — count is small (<= MAX_DRIVERS)
-  for (uint8_t i = 1; i < count; i++) {
-    uint8_t key = s_sortedIdx[i];
-    int8_t  j   = (int8_t)i - 1;
-    uint8_t kp  = g_drivers[key].position;
-    while (j >= 0 && g_drivers[s_sortedIdx[j]].position > kp) {
-      s_sortedIdx[j + 1] = s_sortedIdx[j];
-      j--;
-    }
-    s_sortedIdx[j + 1] = key;
-  }
-}
-
-// Layout for timing screens (pixels)
-static const int16_t TIM_HDR_H  = 34;   // status/session header bar
-static const int16_t TIM_INFO_H = 20;   // info bar (Q stage+time / lap counter)
-static const int16_t TIM_SEP_Y  = TIM_HDR_H + TIM_INFO_H;  // = 54
-static const int16_t TIM_ROW_H  = 26;   // height of each driver row
-static const int16_t TIM_ROWS_Y = TIM_SEP_Y + 2;            // = 56
-
-// ─── Shared driver-row renderer ──────────────────────────────────────────────
-// isQual=true  → right column shows bestLap, knocked-out drivers are greyed
-// isQual=false → right column shows lastLap (leader) or interval (others)
-static void drawTimingRows(bool isQual) {
-  // ── Separator (2 px, single SPI call) ─────────────────────────────────────
-  g_tft.fillRect(0, TIM_SEP_Y, TFT_WIDTH, 2, COL_DGRAY);
-
-  // ── Driver rows: top 10 sorted by position ────────────────────────────────
-  sortDriversByPosition(g_driverCount);
-  uint8_t shown = 0;
-  for (uint8_t i = 0; i < g_driverCount && shown < 10; i++) {
-    const DriverTiming& d = g_drivers[s_sortedIdx[i]];
-    if (d.position == 0 && d.tla[0] == '\0') continue;  // unfilled slot
-
-    int16_t ry = TIM_ROWS_Y + shown * TIM_ROW_H;
-
-    // Alternate row background
-    g_tft.fillRect(0, ry, TFT_WIDTH, TIM_ROW_H,
-                   (shown & 1) ? 0x1082 : COL_BG);
-
-    uint16_t tc = (isQual && d.knockedOut) ? COL_GRAY : COL_WHITE;
-    int16_t  ty = ry + (TIM_ROW_H - FONT2_HEIGHT) / 2;
-
-    // Position — FreeSans12pt, left
-    g_tft.setFont(&Formula1_Display_Regular11pt7b);
-    g_tft.setTextSize(1);
-    g_tft.setTextColor(tc);
-    char posBuf[4];
-    snprintf(posBuf, sizeof(posBuf), "%2d", d.position ? d.position : (uint8_t)(shown + 1));
-    g_tft.setCursor(2, ty + FONT2_BASELINE);
-    g_tft.print(posBuf);
-
-    // TLA — FreeSans12pt
-    g_tft.setCursor(30, ty + FONT2_BASELINE);
-    g_tft.print(d.tla[0] ? d.tla : "???");
-    g_tft.setFont(nullptr);
-
-    // Right column — FreeSans9pt, right-aligned
-    const char* rStr;
-    uint16_t    rCol;
-    if (isQual) {
-      rStr = d.bestLap[0] ? d.bestLap : "--:--.---";
-      rCol = d.knockedOut ? COL_GRAY : COL_LGRAY;
-    } else {
-      rStr = (shown == 0)
-             ? (d.lastLap[0]  ? d.lastLap  : "---")
-             : (d.interval[0] ? d.interval : "---");
-      rCol = COL_LGRAY;
-    }
-    g_tft.setFont(&Formula1_Display_Regular7pt7b);
-    g_tft.setTextSize(1);
-    g_tft.setTextColor(rCol);
-    int16_t rx1, ry1; uint16_t rW, rH;
-    g_tft.getTextBounds(rStr, 0, 0, &rx1, &ry1, &rW, &rH);
-    g_tft.setCursor(TFT_WIDTH - (int16_t)rW - 4, ry + (TIM_ROW_H - FONT1_HEIGHT) / 2 + FONT1_BASELINE);
-    g_tft.print(rStr);
-
-    // Pit marker
-    if (d.inPit) {
-      g_tft.setTextColor(COL_ORANGE);
-      g_tft.setCursor(70, ry + (TIM_ROW_H - FONT1_HEIGHT) / 2 + FONT1_BASELINE);
-      g_tft.print("P");
-    }
-    g_tft.setFont(nullptr);
-
-    shown++;
-  }
-
-  // Fill any remaining rows with blank
-  for (; shown < 10; shown++) {
-    int16_t ry = TIM_ROWS_Y + shown * TIM_ROW_H;
-    g_tft.fillRect(0, ry, TFT_WIDTH, TIM_ROW_H,
-                   (shown & 1) ? 0x1082 : COL_BG);
-  }
-}
-
-// ─── Qualifying screen ────────────────────────────────────────────────────────
-
-// Cached state for partial-redraw optimisation
-static TrackStatus s_lastQualStatus = TrackStatus::UNKNOWN;
-static char        s_lastQualStage[8]  = {};
-static char        s_lastRemaining[16] = {};
-
-void displayShowQualifying(TrackStatus status) {
-  uint16_t bg, fg;
-  statusBgFg(status, bg, fg);
-
-  // ── Status / session header bar (only when status changes) ───────────────
-  if (status != s_lastQualStatus) {
-    s_lastQualStatus = status;
-    g_tft.fillRect(0, 0, TFT_WIDTH, TIM_HDR_H, bg);
-    g_tft.setTextColor(fg);
-    g_tft.setFont(&Formula1_Display_Regular11pt7b);
-    g_tft.setTextSize(1);
-    g_tft.setCursor(4, (TIM_HDR_H - FONT2_HEIGHT) / 2 + FONT2_BASELINE);
-    g_tft.print("Qualifying");
-    g_tft.setFont(&Formula1_Display_Regular7pt7b);
-    g_tft.setTextSize(1);
-    int16_t stx1, sty1; uint16_t stw, sth;
-    g_tft.getTextBounds(statusLabel(status), 0, 0, &stx1, &sty1, &stw, &sth);
-    g_tft.setCursor(TFT_WIDTH - (int16_t)stw - 4, TIM_HDR_H - FONT1_HEIGHT + FONT1_BASELINE - 1);
-    g_tft.print(statusLabel(status));
-    g_tft.setFont(nullptr);
-  }
-
-  // ── Info bar (only when content changes) ─────────────────────────────────
-  const char* stage = g_qualStage[0] ? g_qualStage : "--";
-  const char* rem   = g_remainingTime[0] ? g_remainingTime : "--:--";
-  if (strcmp(stage, s_lastQualStage) != 0 || strcmp(rem, s_lastRemaining) != 0) {
-    strncpy(s_lastQualStage,  stage, sizeof(s_lastQualStage)  - 1);
-    strncpy(s_lastRemaining,  rem,   sizeof(s_lastRemaining)  - 1);
-    g_tft.fillRect(0, TIM_HDR_H, TFT_WIDTH, TIM_INFO_H, COL_DGRAY);
-    g_tft.setTextColor(COL_WHITE);
-    g_tft.setFont(&Formula1_Display_Regular11pt7b);
-    g_tft.setTextSize(1);
-    g_tft.setCursor(4, TIM_HDR_H + FONT2_BASELINE);
-    g_tft.print(stage);
-    g_tft.setFont(&Formula1_Display_Regular7pt7b);
-    int16_t rx1, ry1; uint16_t rw, rh;
-    g_tft.getTextBounds(rem, 0, 0, &rx1, &ry1, &rw, &rh);
-    g_tft.setCursor(TFT_WIDTH - (int16_t)rw - 4, TIM_HDR_H + FONT1_BASELINE + (TIM_INFO_H - FONT1_HEIGHT) / 2);
-    g_tft.print(rem);
-    g_tft.setFont(nullptr);
-  }
-
-  drawTimingRows(true);
-}
-
-// ─── Race / Sprint screen ─────────────────────────────────────────────────────
-
-// Cached state for partial-redraw optimisation
-static TrackStatus s_lastRaceStatus = TrackStatus::UNKNOWN;
-static uint8_t     s_lastCurLap     = 0xFF;
-static uint8_t     s_lastTotLaps    = 0xFF;
-
-void displayShowRace(TrackStatus status) {
-  uint16_t bg, fg;
-  statusBgFg(status, bg, fg);
-
-  // ── Status / session header bar (only when status changes) ───────────────
-  if (status != s_lastRaceStatus) {
-    s_lastRaceStatus = status;
-    g_tft.fillRect(0, 0, TFT_WIDTH, TIM_HDR_H, bg);
-    g_tft.setTextColor(fg);
-    const char* sessionLabel =
-      (g_sessionType == SessionType::SPRINT || g_sessionType == SessionType::SPRINT_QUALIFYING)
-      ? "F1 SPRINT" : "F1 RACE";
-    g_tft.setFont(&Formula1_Display_Regular11pt7b);
-    g_tft.setTextSize(1);
-    g_tft.setCursor(4, (TIM_HDR_H - FONT2_HEIGHT) / 2 + FONT2_BASELINE);
-    g_tft.print(sessionLabel);
-    g_tft.setFont(&Formula1_Display_Regular7pt7b);
-    g_tft.setTextSize(1);
-    int16_t stx1, sty1; uint16_t stw, sth;
-    g_tft.getTextBounds(statusLabel(status), 0, 0, &stx1, &sty1, &stw, &sth);
-    g_tft.setCursor(TFT_WIDTH - (int16_t)stw - 4, TIM_HDR_H - FONT1_HEIGHT + FONT1_BASELINE - 1);
-    g_tft.print(statusLabel(status));
-    g_tft.setFont(nullptr);
-  }
-
-  // ── Info bar (only when lap counter changes) ──────────────────────────────
-  if (g_currentLap != s_lastCurLap || g_totalLaps != s_lastTotLaps) {
-    s_lastCurLap  = g_currentLap;
-    s_lastTotLaps = g_totalLaps;
-    g_tft.fillRect(0, TIM_HDR_H, TFT_WIDTH, TIM_INFO_H, COL_DGRAY);
-    g_tft.setTextColor(COL_WHITE);
-    char lapBuf[16];
-    if (g_totalLaps > 0)
-      snprintf(lapBuf, sizeof(lapBuf), "Lap %d/%d", g_currentLap, g_totalLaps);
-    else
-      snprintf(lapBuf, sizeof(lapBuf), "Lap %d", g_currentLap);
-    g_tft.setFont(&Formula1_Display_Regular11pt7b);
-    g_tft.setTextSize(1);
-    printCentred(lapBuf, TIM_HDR_H + FONT2_BASELINE);
-    g_tft.setFont(nullptr);
-  }
-
-  drawTimingRows(false);
 }
 
 // ─── Championship standings screen ─────────────────────────────────────────────────────────
@@ -829,7 +615,7 @@ void displayShowChampionship() {
     g_tft.setFont(&Formula1_Display_Regular11pt7b);
     g_tft.setTextSize(1);
     g_tft.setTextColor(COL_WHITE);
-    g_tft.setCursor(28, ry + FONT2_BASELINE + (ROW_H - FONT2_HEIGHT) / 2);
+    g_tft.setCursor(28, ry + 1 + FONT2_BASELINE + (ROW_H - FONT2_HEIGHT) / 2);
     g_tft.print(e.code[0] ? e.code : "???");
 
     // ── Points (right-aligned, yellow) ────────────────────────────────────

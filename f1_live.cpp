@@ -50,15 +50,22 @@ static const char* SIGNALR_CONNECT_HOST   = "livetiming.formula1.com";
 static const int   SIGNALR_PORT           = 443;
 // WebSocket path is built at runtime once we have the token.
 
-// Subscribe to all streams needed for the timing display.
+// Subscribe message — only the 2 streams we actually need.
+// TrackStatus: drives the LEDs and display.
+// SessionStatus: tells us when the session ends so we can return to IDLE.
+// Minimal subscription = minimal "R" seed object = no TLS buffer overflow.
 static const char* SUBSCRIBE_MSG =
   "{\"H\":\"Streaming\",\"M\":\"Subscribe\","
-  "\"A\":[[\"TrackStatus\",\"SessionStatus\",\"TimingData\","
-  "\"DriverList\",\"SessionInfo\",\"LapCount\","
-  "\"ExtrapolatedClock\"]],\"I\":1}";
+  "\"A\":[[\"TrackStatus\",\"SessionStatus\"]],\"I\":1}";
 
-// Heartbeat: re-send subscribe every 4 minutes to keep the SignalR group alive.
-static const uint32_t HEARTBEAT_INTERVAL_MS = 4UL * 60UL * 1000UL;
+// Heartbeat: re-send subscribe every 5 minutes to keep the SignalR group alive.
+// Matches the reference (signalr.py) which uses asyncio.sleep(300).
+static const uint32_t HEARTBEAT_INTERVAL_MS = 5UL * 60UL * 1000UL;
+
+// Inactivity guard: if no WebSocket frame arrives for 45 s after the seed data
+// is received, the server has gone silent — force a reconnect.
+// Matches the reference _monitor_heartbeat logic (heartbeat_timeout = 45.0 s).
+static const uint32_t INACTIVITY_TIMEOUT_MS = 45000UL;
 
 // Reconnect back-off: 5 s → 10 s → 20 s … cap at 60 s
 static const uint32_t BACKOFF_MIN_MS  = 5000UL;
@@ -84,17 +91,10 @@ static bool g_wsConnected = false;
 uint8_t     g_upcomingCount = 0;
 SessionInfo g_upcomingSessions[MAX_UPCOMING_SESSIONS];
 static bool g_scheduleRefreshed = false;
-// ─── Live timing data (exposed to display module) ───────────────────────────
-SessionType  g_sessionType       = SessionType::UNKNOWN;
-char         g_qualStage[4]      = "";
-char         g_remainingTime[12] = "--:--";
-uint8_t      g_currentLap        = 0;
-uint8_t      g_totalLaps         = 0;
-uint8_t      g_driverCount       = 0;
-DriverTiming g_drivers[MAX_DRIVERS];
-static bool     g_timingRefreshed       = false;
 static bool     g_seedReceived          = false;  // true once the "R" seed frame is parsed
+static uint8_t  g_wsFrameCount          = 0;      // frames logged since last connect (debug)
 static uint32_t g_connectedAtMs         = 0;      // millis() when WStype_CONNECTED fired
+static uint32_t g_lastStreamActivityMs  = 0;      // millis() of last WStype_TEXT frame received
 static uint32_t g_nextPollMs            = 0;      // absolute ms for next IDLE/LIVE poll
 static bool     g_intentionalDisconnect = false;  // set before deliberate g_ws.disconnect()
 static time_t   g_windowEndUtc          = 0;      // UTC epoch when active session window expires
@@ -104,6 +104,8 @@ ChampEntry      g_champStandings[MAX_CHAMP_ENTRIES];
 static bool     g_champRefreshed        = false;
 static bool     g_needChampFetch        = true;   // fetch standings on next IDLE pass (startup + session end)
 static bool     g_needScheduleFetch     = true;   // fetch event-tracker on next IDLE pass (startup + session end)
+static String   g_signalrEncodedToken   = "";     // URL-encoded token saved for /start call
+static String   g_signalrCookie         = "";     // raw Set-Cookie from negotiate, forwarded to /start
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 /** Return current UTC epoch seconds (requires NTP sync). */
@@ -322,11 +324,14 @@ static String negotiateToken(String& outCookie) {
   String url = String("https://") + SIGNALR_NEGOTIATE_HOST + SIGNALR_NEGOTIATE_PATH;
   http.begin(g_tlsClient, url);
   http.setTimeout(10000);
-  http.addHeader("Accept-Encoding", "identity");
-  http.addHeader("User-Agent", "BestHTTP");
+  // No extra request headers on negotiate — matches the reference (signalr.py),
+  // which calls session.get() with no explicit headers.  User-Agent / Accept-Encoding
+  // are only set on the WebSocket connect step.
 
-  // HTTPClient only retains response headers you explicitly ask for.
-  // Without this call, http.header("Set-Cookie") always returns "".
+  // Collect the first Set-Cookie response header — exactly as the reference does:
+  //   cookie = resp.headers.get("Set-Cookie")
+  // The raw value (including "; Path=/; MaxAge=900; SameSite=None; Secure") is
+  // forwarded verbatim as the Cookie header on the WebSocket upgrade.
   const char* wantedHeaders[] = { "Set-Cookie" };
   http.collectHeaders(wantedHeaders, 1);
 
@@ -337,13 +342,14 @@ static String negotiateToken(String& outCookie) {
     return "";
   }
 
-  // Grab Set-Cookie header for the WS handshake (ARRAffinity load-balancer cookie)
+  // Take the raw Set-Cookie value exactly as received — no attribute stripping.
   outCookie = http.header("Set-Cookie");
-  Serial.printf("[F1] Negotiate cookie: %s\n",
-                outCookie.length() > 0 ? "received" : "NONE (server may reject WS)");
+  Serial.printf("[F1] Negotiate Set-Cookie: %.100s%s\n",
+                outCookie.c_str(), outCookie.length() > 100 ? "..." : "(end)");
 
   String payload = http.getString();
   http.end();
+  g_tlsClient.stop();  // free ~40 KB SSL heap before the WebSocket TLS session opens
 
   // Strip UTF-8 BOM if present
   if (payload.length() >= 3 &&
@@ -368,91 +374,6 @@ static String negotiateToken(String& outCookie) {
   return token;
 }
 
-// ─── Live timing helpers ──────────────────────────────────────────────────────
-
-void resetDriverData() {
-  g_driverCount         = 0;
-  g_sessionType         = SessionType::UNKNOWN;
-  g_qualStage[0]        = '\0';
-  strncpy(g_remainingTime, "--:--", sizeof(g_remainingTime) - 1);
-  g_currentLap          = 0;
-  g_totalLaps           = 0;
-  g_seedReceived        = false;
-  g_emptyConnectCount   = 0;
-  memset(g_drivers, 0, sizeof(g_drivers));
-}
-
-static DriverTiming* findOrCreateDriver(const char* racingNumber) {
-  for (uint8_t i = 0; i < g_driverCount; i++) {
-    if (strcmp(g_drivers[i].racingNumber, racingNumber) == 0)
-      return &g_drivers[i];
-  }
-  if (g_driverCount < MAX_DRIVERS) {
-    DriverTiming& d = g_drivers[g_driverCount++];
-    memset(&d, 0, sizeof(d));
-    strncpy(d.racingNumber, racingNumber, sizeof(d.racingNumber) - 1);
-    d.position = 99;
-    return &d;
-  }
-  return nullptr;
-}
-
-static void parseTimingData(JsonObject data) {
-  if (data.containsKey("SessionPart")) {
-    int part = data["SessionPart"].as<int>();
-    if (part >= 1 && part <= 3)
-      snprintf(g_qualStage, sizeof(g_qualStage), "Q%d", part);
-  }
-  JsonObject lines = data["Lines"].as<JsonObject>();
-  if (lines.isNull()) return;
-  for (JsonPair kv : lines) {
-    const char* num = kv.key().c_str();
-    if (!isDigit((unsigned char)num[0])) continue;
-    JsonObject dv = kv.value().as<JsonObject>();
-    DriverTiming* d = findOrCreateDriver(num);
-    if (!d) continue;
-    const char* pos = dv["Position"] | "";
-    if (pos[0]) d->position = (uint8_t)atoi(pos);
-    const char* bl = dv["BestLapTime"]["Value"] | "";
-    if (bl[0]) strncpy(d->bestLap, bl, sizeof(d->bestLap) - 1);
-    const char* ll = dv["LastLapTime"]["Value"] | "";
-    if (ll[0]) strncpy(d->lastLap, ll, sizeof(d->lastLap) - 1);
-    const char* iv = dv["IntervalToPositionAhead"]["Value"] | "";
-    if (iv[0]) strncpy(d->interval, iv, sizeof(d->interval) - 1);
-    { JsonVariant v = dv["InPit"];      if (!v.isNull()) d->inPit      = v.as<bool>(); }
-    { JsonVariant v = dv["KnockedOut"]; if (!v.isNull()) d->knockedOut = v.as<bool>(); }
-  }
-  g_timingRefreshed = true;
-}
-
-static void parseDriverList(JsonObject data) {
-  for (JsonPair kv : data) {
-    const char* num = kv.key().c_str();
-    if (!isDigit((unsigned char)num[0])) continue;
-    JsonObject di = kv.value().as<JsonObject>();
-    const char* tla = di["Tla"] | "";
-    if (strlen(tla) >= 2) {
-      DriverTiming* d = findOrCreateDriver(num);
-      if (d) strncpy(d->tla, tla, sizeof(d->tla) - 1);
-    }
-  }
-}
-
-static void parseSessionInfo(JsonObject data) {
-  const char* name = data["Name"] | "";
-  if (!name[0]) name = data["Type"] | "";
-  Serial.printf("[F1] Session type: %s\n", name);
-  if      (strstr(name, "Sprint Qualifying") || strstr(name, "Shootout"))
-    g_sessionType = SessionType::SPRINT_QUALIFYING;
-  else if (strstr(name, "Sprint"))
-    g_sessionType = SessionType::SPRINT;
-  else if (strstr(name, "Qualifying"))
-    g_sessionType = SessionType::QUALIFYING;
-  else if (strstr(name, "Race"))
-    g_sessionType = SessionType::RACE;
-  else if (strstr(name, "Practice"))
-    g_sessionType = SessionType::PRACTICE;
-}
 // ─── Championship standings fetch ──────────────────────────────────────────────────────
 
 static void fetchChampStandings() {
@@ -619,7 +540,7 @@ static void fetchEventTracker() {
   }
 
   Serial.printf("[F1] Event-tracker: %u session(s) stored\n", g_upcomingCount);
-  if (g_upcomingCount > 0) g_scheduleRefreshed = true;
+  g_scheduleRefreshed = true;  // always redraw — covers the "0 sessions" (race just finished) case too
 }
 
 // ─── WebSocket event handler ──────────────────────────────────────────────────
@@ -643,8 +564,15 @@ static void onWsEvent(WStype_t type, uint8_t* payload, size_t length) {
       // inside f1LiveLoop(), which avoids a uint32_t underflow when millis()
       // inside this callback is even 1 ms ahead of 'now'.
       Serial.println("[F1] WebSocket connected");
-      resetDriverData();
-      g_ws.sendTXT(SUBSCRIBE_MSG);
+      g_wsFrameCount = 0;  // reset per-connection frame log
+      g_seedReceived = false;
+      // Subscribe is sent from f1LiveLoop()'s edge-detector immediately after
+      // g_ws.loop() returns rather than here.  Calling sendTXT() inside
+      // g_ws.loop() (which is what firing from a callback means) risks hitting
+      // internal state that isn't yet ready for writes, causing a silent failure
+      // — the server never receives Subscribe, waits briefly, then closes with
+      // "Connection lost" (code 17263).  The edge-detector send is equivalent
+      // in timing (same loop() call) but guaranteed to run outside the library.
       break;
 
     case WStype_DISCONNECTED: {
@@ -654,12 +582,15 @@ static void onWsEvent(WStype_t type, uint8_t* payload, size_t length) {
       if (payload && length >= 2) {
         uint16_t code = (uint16_t)((payload[0] << 8) | payload[1]);
         if (length > 2)
-          Serial.printf("[F1] WebSocket closed (code %u: %.*s)\n", code,
-                        (int)min(length - 2, (size_t)60), (const char*)payload + 2);
+          Serial.printf("[F1] WebSocket closed (code %u: %.*s) intentional=%d\n", code,
+                        (int)min(length - 2, (size_t)60), (const char*)payload + 2,
+                        (int)g_intentionalDisconnect);
         else
-          Serial.printf("[F1] WebSocket closed (code %u)\n", code);
+          Serial.printf("[F1] WebSocket closed (code %u) intentional=%d\n",
+                        code, (int)g_intentionalDisconnect);
       } else {
-        Serial.println("[F1] WebSocket disconnected");
+        Serial.printf("[F1] WebSocket disconnected (TCP drop, len=%u) intentional=%d\n",
+                      (unsigned)length, (int)g_intentionalDisconnect);
       }
 
       if (g_intentionalDisconnect) {
@@ -680,6 +611,17 @@ static void onWsEvent(WStype_t type, uint8_t* payload, size_t length) {
     }
 
     case WStype_TEXT: {
+      // Track last activity — used by the 45-second inactivity guard.
+      g_lastStreamActivityMs = millis();
+
+      // Log first few frames verbatim (truncated) to diagnose server responses.
+      if (g_wsFrameCount < 5) {
+        g_wsFrameCount++;
+        Serial.printf("[F1] WS frame #%u (%u bytes): %.120s\n",
+                      g_wsFrameCount, (unsigned)length,
+                      payload ? (const char*)payload : "(null)");
+      }
+
       // ── Parse SignalR hub envelope ─────────────────────────────────────────
       // Frames arrive as: {"M":[{"M":"feed","A":["TrackStatus",{...}]}],...}
       static JsonDocument doc;
@@ -727,33 +669,12 @@ static void onWsEvent(WStype_t type, uint8_t* payload, size_t length) {
             g_ws.disconnect();
             g_wsConnected   = false;
             g_trackStatus   = TrackStatus::UNKNOWN;
-            g_state         = F1State::IDLE;
+            g_upcomingCount = 0;  // clear stale schedule immediately so IDLE shows "No upcoming sessions"
+            g_state         = F1State::SESSION_ENDED;
             g_nextPollMs    = millis() + F1_POST_WINDOW_MS;
             g_needScheduleFetch = true;
             g_needChampFetch    = true;
-            resetDriverData();
           }
-        }
-        else if (strcmp(stream, "TimingData") == 0) {
-          parseTimingData(data);
-        }
-        else if (strcmp(stream, "DriverList") == 0) {
-          parseDriverList(data);
-          g_timingRefreshed = true;
-        }
-        else if (strcmp(stream, "SessionInfo") == 0) {
-          parseSessionInfo(data);
-          g_timingRefreshed = true;
-        }
-        else if (strcmp(stream, "LapCount") == 0) {
-          if (data.containsKey("CurrentLap")) g_currentLap = (uint8_t)data["CurrentLap"].as<int>();
-          if (data.containsKey("TotalLaps"))  g_totalLaps  = (uint8_t)data["TotalLaps"].as<int>();
-          g_timingRefreshed = true;
-        }
-        else if (strcmp(stream, "ExtrapolatedClock") == 0) {
-          const char* rem = data["Remaining"] | "";
-          if (rem[0]) strncpy(g_remainingTime, rem, sizeof(g_remainingTime) - 1);
-          g_timingRefreshed = true;
         }
       }
 
@@ -769,13 +690,13 @@ static void onWsEvent(WStype_t type, uint8_t* payload, size_t length) {
           Serial.println("[F1] Seed shows session already over — disconnecting");
           g_intentionalDisconnect = true;
           g_ws.disconnect();
-          g_wsConnected = false;
-          g_trackStatus = TrackStatus::UNKNOWN;
-          g_state       = F1State::IDLE;
-          g_nextPollMs  = millis() + F1_POST_WINDOW_MS;
+          g_wsConnected   = false;
+          g_trackStatus   = TrackStatus::UNKNOWN;
+          g_upcomingCount = 0;  // clear stale schedule immediately
+          g_state         = F1State::IDLE;
+          g_nextPollMs    = millis() + F1_POST_WINDOW_MS;
           g_needScheduleFetch = true;
           g_needChampFetch    = true;
-          resetDriverData();
           break;
         }
 
@@ -795,24 +716,8 @@ static void onWsEvent(WStype_t type, uint8_t* payload, size_t length) {
           Serial.printf("[F1] Seed track status: %s\n", trackStatusName(g_trackStatus));
         }
 
-        // Seed timing streams
-        JsonObject seedTd = rResult["TimingData"].as<JsonObject>();
-        if (!seedTd.isNull()) parseTimingData(seedTd);
-        JsonObject seedDl = rResult["DriverList"].as<JsonObject>();
-        if (!seedDl.isNull()) parseDriverList(seedDl);
-        JsonObject seedSi = rResult["SessionInfo"].as<JsonObject>();
-        if (!seedSi.isNull()) parseSessionInfo(seedSi);
-        JsonObject seedLc = rResult["LapCount"].as<JsonObject>();
-        if (!seedLc.isNull()) {
-          if (seedLc.containsKey("CurrentLap")) g_currentLap = (uint8_t)seedLc["CurrentLap"].as<int>();
-          if (seedLc.containsKey("TotalLaps"))  g_totalLaps  = (uint8_t)seedLc["TotalLaps"].as<int>();
-        }
-        JsonObject seedEc = rResult["ExtrapolatedClock"].as<JsonObject>();
-        if (!seedEc.isNull()) {
-          const char* rem = seedEc["Remaining"] | "";
-          if (rem[0]) strncpy(g_remainingTime, rem, sizeof(g_remainingTime) - 1);
-        }
-        g_seedReceived = true;
+        g_seedReceived      = true;
+        g_emptyConnectCount = 0;  // connection was good — reset consecutive-failure counter
         Serial.println("[F1] Seed data applied");
       }
       break;
@@ -839,6 +744,42 @@ static void onWsEvent(WStype_t type, uint8_t* payload, size_t length) {
 
 // ─── Connect to SignalR ───────────────────────────────────────────────────────
 
+/**
+ * Call GET /signalr/start to complete the SignalR 1.x handshake.
+ * SignalR 1.x spec: after the WebSocket transport is established the client
+ * must call /start so the server transitions from "connecting" to "connected".
+ * Without this call the server sends {"S":1} and then closes the socket with
+ * "Connection lost" (code 17263) after a brief timeout.
+ * g_tlsClient is idle during the LIVE state (WebSocket uses its own internal
+ * TLS connection), so we reuse it here to avoid a second 40 KB TLS heap.
+ */
+static void callSignalRStart() {
+  if (g_signalrEncodedToken.isEmpty()) return;
+
+  String url = String("https://") + SIGNALR_CONNECT_HOST + "/signalr/start"
+               + "?transport=webSockets&clientProtocol=1.5"
+               + "&connectionToken=" + g_signalrEncodedToken
+               + "&connectionData=%5B%7B%22name%22%3A%22Streaming%22%7D%5D";
+
+  g_tlsClient.setInsecure();
+  HTTPClient http;
+  http.begin(g_tlsClient, url);
+  http.setTimeout(5000);
+  http.addHeader("User-Agent", "BestHTTP");
+  if (g_signalrCookie.length() > 0)
+    http.addHeader("Cookie", g_signalrCookie);
+
+  int code = http.GET();
+  if (code == 200) {
+    String resp = http.getString();
+    Serial.printf("[F1] /start OK: %s\n", resp.c_str());
+  } else {
+    Serial.printf("[F1] /start HTTP %d\n", code);
+  }
+  http.end();
+  g_tlsClient.stop();  // free ~40 KB SSL heap before next use
+}
+
 static bool connectSignalR() {
   String cookie;
   String token = negotiateToken(cookie);
@@ -861,16 +802,34 @@ static bool connectSignalR() {
                   + "&connectionToken=" + encodedToken
                   + "&connectionData=%5B%7B%22name%22%3A%22Streaming%22%7D%5D";
 
-  // Always send the headers the F1 server expects.
-  // Cookie is only present when negotiate returned one (Azure ARRAffinity);
-  // without it the connect may be routed to a different backend (HTTP 400).
-  String extraHeaders = "User-Agent: BestHTTP\r\n";
-  extraHeaders += "Accept-Encoding: gzip, identity\r\n";
+  Serial.printf("[F1] Token: raw=%u chars  encoded=%u chars\n",
+                token.length(), encodedToken.length());
+
+  // Always send the headers the F1 server expects — matches the reference
+  // (signalr.py) which sets exactly these two headers on the WS connect.
+  // Cookie is the raw Set-Cookie value from negotiate, forwarded verbatim
+  // (including attributes) exactly as the reference does.
+  //
+  // IMPORTANT: do NOT put \r\n at the end of the last header here.
+  // WebSocketsClient::sendHeader() does:
+  //   handshake += extraHeaders + "\r\n";
+  //   handshake += "User-Agent: arduino-WebSocket-Client\r\n";
+  //   handshake += "\r\n";   // ← final blank line
+  // If we trail our last header with \r\n, the library adds another \r\n
+  // immediately after, inserting a blank line in the *middle* of the HTTP
+  // headers.  The server sees that blank line as end-of-headers and then
+  // receives "User-Agent: arduino-WebSocket-Client\r\n\r\n" as the first
+  // WebSocket frame — which is garbage, causing an immediate close.
+  String extraHeaders = "User-Agent: BestHTTP\r\nAccept-Encoding: gzip,identity";
   if (cookie.length() > 0) {
-    extraHeaders += "Cookie: " + cookie + "\r\n";
-    Serial.printf("[F1] WS cookie: %.50s%s\n",
-                  cookie.c_str(), cookie.length() > 50 ? "..." : "");
+    extraHeaders += "\r\nCookie: " + cookie;  // no trailing \r\n — library adds it
+    Serial.printf("[F1] WS cookie header: %.100s%s\n",
+                  cookie.c_str(), cookie.length() > 100 ? "..." : "");
+  } else {
+    Serial.println("[F1] WS cookie header: NONE");
   }
+  Serial.printf("[F1] WS path (%u chars, first 120): %.120s\n",
+                wsPath.length(), wsPath.c_str());
 
   // Purge any lingering socket/TLS state from the previous connection attempt.
   // beginSSL() on a dirty g_ws object replays stale connect+disconnect events,
@@ -880,9 +839,17 @@ static bool connectSignalR() {
   g_ws.disconnect();
 
   g_ws.setExtraHeaders(extraHeaders.c_str());
-  g_ws.beginSSL(SIGNALR_CONNECT_HOST, SIGNALR_PORT, wsPath.c_str());
+  // Pass "" for protocol to suppress the default "Sec-WebSocket-Protocol: arduino"
+  // header — the F1 SignalR server does not recognise that sub-protocol and
+  // closes the connection immediately after sending {"S":1}.  Python's
+  // websocket-client library sends no sub-protocol header, and it works.
+  g_ws.beginSSL(SIGNALR_CONNECT_HOST, SIGNALR_PORT, wsPath.c_str(), "", "");
   g_ws.onEvent(onWsEvent);
   g_ws.setReconnectInterval(0);  // our state machine handles retries
+
+  // Save token and cookie so callSignalRStart() can use them from f1LiveLoop()
+  g_signalrEncodedToken = encodedToken;
+  g_signalrCookie       = cookie;
 
   Serial.printf("[F1] Opening WebSocket (token %.8s...)\n", token.c_str());
   return true;  // actual connection result arrives via WStype_CONNECTED callback
@@ -1010,6 +977,14 @@ void f1LiveLoop() {
   if (g_state == F1State::CONNECTING) {
     if (connectSignalR()) {
       g_state = F1State::LIVE;
+      // Defer the next LIVE-state session-window poll by a full interval.
+      // Without this, g_nextPollMs is stale from the IDLE poll (which
+      // happened minutes ago during backoff retries), so the first LIVE
+      // loop iteration immediately calls isSessionWindowActive() — a
+      // blocking HTTP call that takes 2-3 s.  During that time g_ws.loop()
+      // is never called, the server's TCP send buffer fills with seed data
+      // frames, and the server closes the connection.
+      g_nextPollMs = now + F1_POLL_INTERVAL_MS;
     } else {
       Serial.println("[F1] Connection failed — back-off retry");
       g_state          = F1State::RECONNECTING;
@@ -1031,11 +1006,18 @@ void f1LiveLoop() {
     // making the heartbeat fire immediately and sending a duplicate subscribe
     // that causes the server to close the socket.
     if (g_wsConnected && !s_prevConnected) {
-      // Set both timers from 'now' (safe: now <= actual current time).
-      // This avoids uint32_t underflow if millis() inside WStype_CONNECTED
-      // fired 1 ms ahead of 'now' captured at the start of this function.
-      g_lastHeartbeatMs = now;
-      g_connectedAtMs   = now;
+      // Set timers from 'now' (captured before g_ws.loop()) — avoids uint32_t
+      // underflow if millis() inside WStype_CONNECTED was 1 ms ahead of 'now'.
+      g_lastHeartbeatMs      = now;
+      g_connectedAtMs        = now;
+      g_lastStreamActivityMs = now;
+      // Send Subscribe here, outside g_ws.loop(), where the SSL write path is
+      // unconditionally ready.  Matches the reference: send_json() is called
+      // immediately after ws_connect() returns, not inside a library callback.
+      bool sent = g_ws.sendTXT(SUBSCRIBE_MSG);
+      Serial.printf("[F1] Subscribe %s (%u bytes)\n",
+                    sent ? "sent" : "FAILED — will retry on heartbeat",
+                    (unsigned)strlen(SUBSCRIBE_MSG));
     }
     s_prevConnected = g_wsConnected;
 
@@ -1056,11 +1038,27 @@ void f1LiveLoop() {
       return;
     }
 
+    // ── Inactivity guard ─────────────────────────────────────────────────────
+    // If the seed data arrived but then the server goes silent for 45 s,
+    // force a reconnect — matches the reference _monitor_heartbeat logic.
+    if (g_wsConnected && g_seedReceived &&
+        (now - g_lastStreamActivityMs >= INACTIVITY_TIMEOUT_MS)) {
+      Serial.println("[F1] 45 s inactivity — forcing reconnect");
+      g_intentionalDisconnect = true;
+      g_ws.disconnect();
+      g_wsConnected    = false;
+      s_prevConnected  = false;
+      g_state          = F1State::RECONNECTING;
+      g_reconnectAfter = now + BACKOFF_MIN_MS;
+      g_backoffMs      = BACKOFF_MIN_MS;  // reset back-off: this is a clean reconnect
+      return;
+    }
+
     // ── Heartbeat ─────────────────────────────────────────────────────────────
     if (g_wsConnected && (now - g_lastHeartbeatMs >= HEARTBEAT_INTERVAL_MS)) {
-      g_ws.sendTXT(SUBSCRIBE_MSG);
+      bool sent = g_ws.sendTXT(SUBSCRIBE_MSG);
       g_lastHeartbeatMs = now;
-      Serial.println("[F1] Heartbeat sent");
+      Serial.printf("[F1] Heartbeat %s\n", sent ? "sent" : "FAILED");
     }
 
     // Periodic session window check: if the window closed, disconnect gracefully
@@ -1073,12 +1071,22 @@ void f1LiveLoop() {
         g_wsConnected   = false;
         s_prevConnected = false;
         g_trackStatus   = TrackStatus::UNKNOWN;
+        g_upcomingCount = 0;  // clear stale schedule immediately
         g_state         = F1State::IDLE;
         g_nextPollMs    = now + F1_POST_WINDOW_MS;  // override: delay re-poll
         g_needScheduleFetch = true;
         g_needChampFetch    = true;
       }
     }
+    return;
+  }
+
+  // \u2500\u2500 5b. SESSION_ENDED: main loop plays the animation, then we move to IDLE \u2500\u2500\u2500\u2500\u2500
+  // The actual effect (effectSessionFinished) and display (displayShowFinished) are
+  // called from F1_Light.ino on the stateChanged transition.  f1_live.cpp simply
+  // moves to IDLE on the very next iteration so the main loop has one pass to draw.
+  if (g_state == F1State::SESSION_ENDED) {
+    g_state = F1State::IDLE;
     return;
   }
 
@@ -1131,14 +1139,6 @@ void f1LiveLoop() {
 bool f1ScheduleRefreshed() {
   if (g_scheduleRefreshed) {
     g_scheduleRefreshed = false;
-    return true;
-  }
-  return false;
-}
-
-bool f1TimingRefreshed() {
-  if (g_timingRefreshed) {
-    g_timingRefreshed = false;
     return true;
   }
   return false;

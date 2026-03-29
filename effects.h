@@ -57,6 +57,16 @@ void effectVSC();
 /** Urgent red flash — Red flag. */
 void effectRedFlag();
 
+// ─── Session-end celebration ─────────────────────────────────────────────────
+
+/**
+ * Blocking chequered-flag celebration — runs for ~3 s when a session ends.
+ * Alternating white/off LEDs sweep across the strip, finish with a white
+ * flash, then fade to black.  Safe to call because the WebSocket is already
+ * closed before this runs.
+ */
+void effectSessionFinished();
+
 // ─── Retained demo / start-light effects ─────────────────────────────────────
 
 /** F1 race start sequence (blocking, demo only). */

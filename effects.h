@@ -18,6 +18,9 @@ void clearAll();
 /** Slow breathing white — WiFi/NTP not yet ready. */
 void effectConnecting();
 
+/** Last 4 LEDs solid blue, all others off — WiFiManager portal is active. */
+void effectPortal();
+
 /**
  * Solid red at 50 % brightness — connected but no active session.
  * Call effectIdleReset() whenever the device re-enters IDLE so the

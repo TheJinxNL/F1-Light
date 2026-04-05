@@ -33,6 +33,7 @@
 #include "f1_live.h"
 #include "config.h"
 #include "display.h"
+#include "effects.h"
 
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
@@ -104,6 +105,7 @@ ChampEntry      g_champStandings[MAX_CHAMP_ENTRIES];
 static bool     g_champRefreshed        = false;
 static bool     g_needChampFetch        = true;   // fetch standings on next IDLE pass (startup + session end)
 static bool     g_needScheduleFetch     = true;   // fetch event-tracker on next IDLE pass (startup + session end)
+static uint32_t g_wifiRetryMs           = 0;      // millis() when to next attempt WiFiManager portal
 static String   g_signalrEncodedToken   = "";     // URL-encoded token saved for /start call
 static String   g_signalrCookie         = "";     // raw Set-Cookie from negotiate, forwarded to /start
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -882,26 +884,17 @@ void f1LiveBegin() {
     delay(500);
   }
 
-  WiFiManager wm;
-  wm.setConfigPortalTimeout(WIFI_MANAGER_TIMEOUT);
-
-  // Called while the config portal is open — keep the display updated
-  wm.setAPCallback([](WiFiManager*) {
-    Serial.printf("[F1] WiFiManager portal open — SSID: %s\n", WIFI_MANAGER_AP_NAME);
-    displayShowPortal(WIFI_MANAGER_AP_NAME);
-  });
-
-  Serial.println("[F1] WiFiManager: connecting...");
-  if (wm.autoConnect(WIFI_MANAGER_AP_NAME)) {
-    // Credentials were found (or just entered) — WiFi is now connected
-    Serial.printf("[F1] WiFi OK  IP: %s\n", WiFi.localIP().toString().c_str());
-    configTime(NTP_GMT_OFFSET_SEC, NTP_DAYLIGHT_OFFSET_SEC, NTP_SERVER);
-    g_state = F1State::NTP_SYNC;
-  } else {
-    // Portal timed out without credentials — stay in WIFI_CONNECTING so
-    // f1LiveLoop() keeps retrying
-    Serial.println("[F1] WiFiManager portal timed out — will retry");
-  }
+  // Try saved credentials immediately.  If the network is not available,
+  // f1LiveLoop()'s WIFI_CONNECTING handler will open the WiFiManager portal
+  // after a short grace period.  Doing it this way avoids the double-portal
+  // problem: previously autoConnect() was called here AND immediately again
+  // in the loop (g_wifiRetryMs == 0), so a second portal opened the instant
+  // the first one timed out — confusing if the user submitted credentials
+  // near the end of the first portal's window.
+  Serial.println("[F1] WiFi: attempting saved credentials…");
+  WiFi.begin();
+  // Give saved credentials 15 s to connect before the loop opens the portal.
+  g_wifiRetryMs = millis() + 15000UL;
 }
 
 void f1LiveLoop() {
@@ -911,9 +904,36 @@ void f1LiveLoop() {
   if (g_state == F1State::WIFI_CONNECTING) {
     if (WiFi.status() == WL_CONNECTED) {
       Serial.printf("[F1] WiFi OK  IP: %s\n", WiFi.localIP().toString().c_str());
-      // Start NTP
       configTime(NTP_GMT_OFFSET_SEC, NTP_DAYLIGHT_OFFSET_SEC, NTP_SERVER);
       g_state = F1State::NTP_SYNC;
+    } else if (now >= g_wifiRetryMs) {
+      // Network not found or portal previously timed out — re-open the
+      // WiFiManager portal so the user can update credentials.
+      // Disconnect first to clear any lingering "sta is connecting" state
+      // that would cause autoConnect() to fail immediately.
+      WiFi.disconnect(false);
+      // static: WiFiManager registers WiFi event handlers internally via
+      // WiFi.onEvent(). If the instance is destroyed while those handlers are
+      // still in the NetworkEvents queue, the next WiFi event calls through a
+      // dangling pointer and crashes (InstrFetchProhibited, PC ≈ 0x0).
+      // Making it static ensures its lifetime matches the program.
+      static WiFiManager wm;
+      wm.setConfigPortalTimeout(WIFI_MANAGER_TIMEOUT);
+      wm.setAPCallback([](WiFiManager*) {
+        Serial.printf("[F1] WiFiManager portal open — SSID: %s\n", WIFI_MANAGER_AP_NAME);
+        displayShowPortal(WIFI_MANAGER_AP_NAME);
+        effectPortal();
+      });
+      Serial.println("[F1] WiFiManager: (re)trying...");
+      if (wm.autoConnect(WIFI_MANAGER_AP_NAME)) {
+        Serial.printf("[F1] WiFi OK  IP: %s\n", WiFi.localIP().toString().c_str());
+        configTime(NTP_GMT_OFFSET_SEC, NTP_DAYLIGHT_OFFSET_SEC, NTP_SERVER);
+        g_state = F1State::NTP_SYNC;
+      } else {
+        // Portal timed out again — short pause then retry so we don't hammer.
+        Serial.println("[F1] WiFiManager portal timed out — will retry");
+        g_wifiRetryMs = millis() + 10000UL;
+      }
     }
     return;
   }
@@ -941,13 +961,30 @@ void f1LiveLoop() {
       g_wsConnected = false;
     }
     g_state = F1State::WIFI_CONNECTING;
-    // WiFiManager has saved credentials — a simple reconnect is enough here
-    WiFi.begin();
+    // Don't call WiFi.begin() — the ESP32's own auto-reconnect is already
+    // running after a drop, and a redundant begin() causes
+    // "sta is connecting, return error".  Just wait 30 s for auto-reconnect
+    // before opening the portal.
+    g_wifiRetryMs = millis() + 30000UL;
     return;
   }
 
   // ── 3. IDLE: poll Index.json every minute ────────────────────────────────
   if (g_state == F1State::IDLE) {
+    // Run one-shot fetches first — they must complete before we decide whether
+    // a session window is active.  Without this order, a boot inside the 30-min
+    // pre-window jumps straight to CONNECTING before fetchEventTracker() runs,
+    // leaving g_upcomingCount = 0 the whole time the connecting screen is shown.
+    if (g_needChampFetch) {
+      g_needChampFetch = false;
+      fetchChampStandings();
+      return;
+    }
+    if (g_needScheduleFetch) {
+      g_needScheduleFetch = false;
+      fetchEventTracker();
+      return;
+    }
     if (now >= g_nextPollMs) {
       g_nextPollMs = now + F1_POLL_INTERVAL_MS;  // schedule next poll
       if (isSessionWindowActive()) {
@@ -955,19 +992,6 @@ void f1LiveLoop() {
       }
       // Always return after the schedule fetch — subsequent fetches run on
       // later iterations so TLS calls are never back-to-back.
-      return;
-    }
-    // Championship standings: fetched at startup and after each session ends.
-    if (g_needChampFetch) {
-      g_needChampFetch = false;
-      fetchChampStandings();
-      return;
-    }
-    // Event-tracker: sole source for the upcoming session schedule.
-    // Fetched at startup and after each session ends.
-    if (g_needScheduleFetch) {
-      g_needScheduleFetch = false;
-      fetchEventTracker();
       return;
     }
     return;
@@ -986,7 +1010,12 @@ void f1LiveLoop() {
       // frames, and the server closes the connection.
       g_nextPollMs = now + F1_POLL_INTERVAL_MS;
     } else {
-      Serial.println("[F1] Connection failed — back-off retry");
+      // Count HTTP/TLS-level failures the same way WStype_DISCONNECTED counts
+      // pre-seed drops — so the g_emptyConnectCount >= 3 escape in RECONNECTING
+      // also fires when the server is simply not accepting connections yet.
+      g_emptyConnectCount++;
+      Serial.printf("[F1] Connection failed — back-off retry (%u consecutive)\n",
+                    g_emptyConnectCount);
       g_state          = F1State::RECONNECTING;
       g_reconnectAfter = now + g_backoffMs;
       g_backoffMs      = min(g_backoffMs * 2u, BACKOFF_MAX_MS);

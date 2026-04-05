@@ -14,6 +14,14 @@ void clearAll() {
 
 // ─── Connection / idle state indicators ──────────────────────────────────────
 
+/** Last 4 LEDs solid blue, all others off — WiFiManager portal active. */
+void effectPortal() {
+  fill_solid(leds, NUM_LEDS, CRGB::Black);
+  for (uint8_t i = NUM_LEDS - 4; i < NUM_LEDS; i++)
+    leds[i] = CRGB::Blue;
+  FastLED.show();
+}
+
 /** Slow breathing white — WiFi / NTP not ready. */
 void effectConnecting() {
   static uint32_t lastMs = 0;

@@ -27,8 +27,12 @@
 #define TFT_WIDTH  170
 #define TFT_HEIGHT 320
 
-// Hours offset from UTC shown on the display  (1 = CET / GMT+1)
-#define DISPLAY_TZ_OFFSET_HOURS  1
+// POSIX timezone string for the display — determines local time and DST shown on screen.
+// Central Europe (CET/CEST):  "CET-1CEST,M3.5.0,M10.5.0/3"
+// UK (GMT/BST):               "GMT0BST,M3.5.0/1,M10.5.0"
+// US Eastern (EST/EDT):       "EST5EDT,M3.2.0,M11.1.0"
+// See https://github.com/nayarsystems/posix_tz_db for more zone strings.
+#define DISPLAY_TZ_POSIX  "CET-1CEST,M3.5.0,M10.5.0/3"
 
 // ─── F1 Live feed polling ─────────────────────────────────────────────────────
 // How often (ms) to poll Index.json to check whether a session window is active

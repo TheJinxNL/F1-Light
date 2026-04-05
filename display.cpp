@@ -64,22 +64,24 @@ static const int16_t SESS_SEP_H  =  8;  // divider + gap between sessions
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-/** Convert UTC epoch to "HH:MM" string in the configured TZ offset. */
+/** Convert UTC epoch to "HH:MM" string in the configured POSIX timezone (DST-aware). */
 static void fmtTime(time_t utc, char* buf, size_t len) {
-  time_t local = utc + (time_t)DISPLAY_TZ_OFFSET_HOURS * 3600L;
-  struct tm t  = {};
-  gmtime_r(&local, &t);
+  setenv("TZ", DISPLAY_TZ_POSIX, 1); tzset();
+  struct tm t = {};
+  localtime_r(&utc, &t);
   snprintf(buf, len, "%02d:%02d", t.tm_hour, t.tm_min);
+  setenv("TZ", "UTC0", 1); tzset();
 }
 
-/** Convert UTC epoch to "Mon DD Mmm" string in the configured TZ offset. */
+/** Convert UTC epoch to "Mon DD Mmm" string in the configured POSIX timezone (DST-aware). */
 static void fmtDate(time_t utc, char* buf, size_t len) {
   static const char* DOW[] = {"Sun","Mon","Tue","Wed","Thu","Fri","Sat"};
   static const char* MON[] = {"Jan","Feb","Mar","Apr","May","Jun",
                                "Jul","Aug","Sep","Oct","Nov","Dec"};
-  time_t local = utc + (time_t)DISPLAY_TZ_OFFSET_HOURS * 3600L;
-  struct tm t  = {};
-  gmtime_r(&local, &t);
+  setenv("TZ", DISPLAY_TZ_POSIX, 1); tzset();
+  struct tm t = {};
+  localtime_r(&utc, &t);
+  setenv("TZ", "UTC0", 1); tzset();
   snprintf(buf, len, "%s %d %s", DOW[t.tm_wday], t.tm_mday, MON[t.tm_mon]);
 }
 
@@ -338,13 +340,24 @@ void displayShowIdle() {
   uint8_t shown = 0;
   const char* curMeeting = nullptr;
 
-  // Build TZ label once (DISPLAY_TZ_OFFSET_HOURS is a compile-time constant)
-  static char tzLabel[10] = {};
-  if (tzLabel[0] == '\0') {
-    if (DISPLAY_TZ_OFFSET_HOURS >= 0)
-      snprintf(tzLabel, sizeof(tzLabel), "GMT+%d", DISPLAY_TZ_OFFSET_HOURS);
+  // Build the TZ label each call so it updates when DST changes.
+  // tm_gmtoff is a GNU extension not available on ESP32 newlib, so derive the
+  // offset by comparing local and UTC broken-down time for the same epoch.
+  char tzLabel[10] = {};
+  {
+    setenv("TZ", DISPLAY_TZ_POSIX, 1); tzset();
+    time_t nowTs = time(nullptr);
+    struct tm lt = {}, ut = {};
+    localtime_r(&nowTs, &lt);
+    gmtime_r(&nowTs, &ut);
+    setenv("TZ", "UTC0", 1); tzset();
+    int offH = lt.tm_hour - ut.tm_hour;
+    if (offH >  12) offH -= 24;   // handle midnight boundary wrap
+    if (offH < -12) offH += 24;
+    if (offH >= 0)
+      snprintf(tzLabel, sizeof(tzLabel), "GMT+%d", offH);
     else
-      snprintf(tzLabel, sizeof(tzLabel), "GMT%d",  DISPLAY_TZ_OFFSET_HOURS);
+      snprintf(tzLabel, sizeof(tzLabel), "GMT%d",  offH);
   }
 
   for (uint8_t i = first; i < g_upcomingCount && shown < 3 && y < 298; i++) {

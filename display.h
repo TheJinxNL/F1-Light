@@ -26,7 +26,7 @@ void displayShowPortal(const char* apName);
 
 /**
  * Idle screen: next race location + upcoming sessions with
- * dates and times converted to GMT+DISPLAY_TZ_OFFSET_HOURS.
+ * dates and times converted to the local timezone defined by DISPLAY_TZ_POSIX (DST-aware).
  * Reads from g_upcomingSessions[] populated by f1LiveLoop().
  */
 void displayShowIdle();

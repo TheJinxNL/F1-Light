@@ -22,7 +22,7 @@ void effectConnecting();
 void effectPortal();
 
 /**
- * Solid red at 50 % brightness — connected but no active session.
+ * Idle pattern: all LEDs are dim red, with the last LED pulsing red.
  * Call effectIdleReset() whenever the device re-enters IDLE so the
  * LEDs redraw immediately.
  */
@@ -33,6 +33,12 @@ void effectIdleReset();
 
 /** Gentle blue breathing — connecting / reconnecting to SignalR. */
 void effectConnectingSignalR();
+
+/**
+ * Overlay a 4-bar time-drain battery on the last 4 LEDs during race sessions.
+ * Pass raceSession=true and the UTC race start time to activate.
+ */
+void effectRaceBatteryOverlay(bool raceSession, time_t raceStartUtc);
 
 // ─── Live track status effects ────────────────────────────────────────────────
 

@@ -14,6 +14,7 @@ Inspiration on how to access the F1 Live Feeds: https://github.com/Nicxe/f1_sens
 
 - **Live track status** via the official F1 SignalR feed — no third-party API key needed
 - **LED effects** for every flag condition: Green, Yellow, Safety Car, VSC, Red Flag
+- **Race battery overlay** — during Race sessions, the last 4 LEDs drain over time like an EV battery indicator
 - **Session-end celebration** — chequered flag LED sweep + "FINISHED" screen when a session ends
 - **Reconnect resilience** — display and LEDs hold the last known track status during a SignalR reconnect
 - **Upcoming screen** — next race name, up to 3 sessions with local times; alternates every 10 s with the standings screen
@@ -114,7 +115,7 @@ Then install **esp32** via **Tools → Board → Boards Manager**. Tested on cor
 See the table above.
 
 ### 3. Configure [config.h](config.h)
-Adjust GPIO pins if your wiring differs. Set `DISPLAY_TZ_OFFSET_HOURS` to your UTC offset. Everything else (WiFi credentials) is configured at runtime.
+Adjust GPIO pins if your wiring differs. Set `DISPLAY_TZ_POSIX` to your local timezone string. Everything else (WiFi credentials) is configured at runtime.
 
 ### 4. Upload
 Select board **ESP32 Dev Module**, choose your COM port, click **Upload**.
@@ -132,13 +133,14 @@ Open **Serial Monitor** at **115200 baud** to see connection progress, parsed se
 | State | Effect |
 |-------|--------|
 | WiFi / NTP connecting | Breathing white |
-| Idle (no session) | Solid red at reduced brightness |
+| Idle (no session) | All LEDs dim red, last LED slowly pulsating |
 | Connecting to SignalR | Gentle blue breathing |
 | 🟢 Green flag | Solid green |
 | 🟡 Yellow flag | Fast yellow blink |
 | 🚗 Safety Car | Alternating blue/yellow chase |
 | 🟠 VSC | Slow orange pulse |
 | 🔴 Red flag | Rapid red flash |
+| Race session overlay | Last 4 LEDs show a draining battery bar over race duration |
 | 🏁 Session finished | Chequered sweep → 3× white flash → fade (~3 s) |
 
 ---
@@ -167,13 +169,14 @@ All constants live in [config.h](config.h):
 | `NUM_LEDS` | 18 | Number of LEDs |
 | `MAX_BRIGHTNESS` | 200 | LED brightness cap (0–255) |
 | `TFT_BL_DEFAULT` | 200 | Backlight brightness at idle (0–255) |
-| `DISPLAY_TZ_OFFSET_HOURS` | 1 | UTC offset for session times on display |
+| `DISPLAY_TZ_POSIX` | `"CET-1CEST,M3.5.0,M10.5.0/3"` | POSIX timezone string used for local display time |
 | `WIFI_MANAGER_AP_NAME` | `"F1-Light-Setup"` | Config portal AP name |
 | `WIFI_MANAGER_TIMEOUT` | 180 | Portal auto-close timeout (seconds) |
 | `WIFI_RESET_PIN` | 0 | GPIO held LOW at boot to reset WiFi credentials |
 | `F1_POLL_INTERVAL_MS` | 60000 | How often to poll the F1 schedule (ms) |
 | `F1_PRE_WINDOW_MS` | 1 800 000 | Connect to feed this many ms before session starts |
 | `F1_POST_WINDOW_MS` | 1 800 000 | Stay connected this many ms after session ends |
+| `RACE_BATTERY_DRAIN_MS` | 5 400 000 | Time for the Race battery overlay to drain from full to empty |
 
 ---
 

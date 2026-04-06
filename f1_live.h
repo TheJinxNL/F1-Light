@@ -70,6 +70,12 @@ F1State   f1GetState();
 /** Latest track status received from the live feed. */
 TrackStatus f1GetTrackStatus();
 
+/** True when the currently active session window is a Race session. */
+bool f1IsRaceSessionActive();
+
+/** UTC start time of the currently active session window (0 if unknown). */
+time_t f1GetActiveSessionStartUtc();
+
 /**
  * Returns true once after each Index.json poll has refreshed the session list.
  * Clears the flag on read — call at most once per loop() iteration.

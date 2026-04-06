@@ -164,15 +164,17 @@ void loop() {
       // If we have a prior track status, keep its LED effect running so the
       // strip stays live-looking during a reconnect.  Only fall back to the
       // blue breathing animation on the very first connect (no status yet).
-      if (status != TrackStatus::UNKNOWN)
+      if (status != TrackStatus::UNKNOWN) {
         effectTrackStatus(status);
-      else
+        effectRaceBatteryOverlay(f1IsRaceSessionActive(), f1GetActiveSessionStartUtc());
+      } else
         effectConnectingSignalR();
       break;
 
     // ── LIVE ─────────────────────────────────────────────────────────────────
     case F1State::LIVE: {
       effectTrackStatus(status);
+      effectRaceBatteryOverlay(f1IsRaceSessionActive(), f1GetActiveSessionStartUtc());
 
       // Only redraw when track status changes
       bool statusChanged = (status != s_prevStatus);

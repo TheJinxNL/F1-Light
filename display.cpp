@@ -657,7 +657,7 @@ void displayBegin() {
   // HSPI: SCLK, MISO (unused/-1), MOSI, CS
   g_spi.begin(TFT_SCLK, -1, TFT_MOSI, TFT_CS);
   g_tft.init(TFT_WIDTH, TFT_HEIGHT);
-  g_tft.setRotation(2);      // portrait, mirrored display correction
+  g_tft.setRotation(0);      // portrait, upright orientation
   g_tft.fillScreen(COL_BG);
   g_tft.setTextWrap(false);
 

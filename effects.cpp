@@ -42,19 +42,35 @@ void effectConnecting() {
 
 /** Solid red at 50% brightness — no session active. */
 static bool g_idleDrawn = false;
+static uint8_t  g_idlePulse  = 32;
+static int8_t   g_idleDir    = 2;
+static uint32_t g_idleLastMs = 0;
+static const uint8_t kIdlePulseMin = 20;
 
 void effectIdleReset() {
-  g_idleDrawn = false;  // force redraw on next effectIdle() call
+  g_idleDrawn  = false;  // force redraw on next effectIdle() call
+  g_idlePulse  = 32;
+  g_idleDir    = 2;
+  g_idleLastMs = 0;
 }
 
 void effectIdle() {
-  if (g_idleDrawn) return;
-  g_idleDrawn = true;
+  const uint32_t now = millis();
+  if (g_idleDrawn && (now - g_idleLastMs < 15)) return;
 
-  FastLED.setBrightness(MAX_BRIGHTNESS / 2);
-  fill_solid(leds, NUM_LEDS, CRGB(255, 0, 0));
+  g_idleDrawn = true;
+  g_idleLastMs = now;
+
+  // Idle base: all LEDs on dim red, last LED pulses brighter/dimmer.
+  fill_solid(leds, NUM_LEDS, CRGB(IDLE_BASE_RED, 0, 0));
+  if (NUM_LEDS > 0)
+    leds[NUM_LEDS - 1] = CRGB(g_idlePulse, 0, 0);
+
   FastLED.show();
-  FastLED.setBrightness(MAX_BRIGHTNESS);  // restore for live effects
+
+  if (g_idlePulse >= IDLE_BASE_RED) g_idleDir = -2;
+  if (g_idlePulse <= kIdlePulseMin) g_idleDir =  2;
+  g_idlePulse = (uint8_t)(g_idlePulse + g_idleDir);
 }
 
 /** Gentle blue breathing — connecting to SignalR. */
@@ -72,6 +88,55 @@ void effectConnectingSignalR() {
   bright += dir;
 
   fill_solid(leds, NUM_LEDS, CRGB(0, 0, bright));
+  FastLED.show();
+}
+
+void effectRaceBatteryOverlay(bool raceSession, time_t raceStartUtc) {
+  static uint8_t  pulse    = 170;
+  static int8_t   pulseDir = 6;
+  static uint32_t lastPulseMs = 0;
+
+  if (!raceSession || NUM_LEDS < 4) {
+    pulse = 170;
+    pulseDir = 6;
+    lastPulseMs = 0;
+    return;
+  }
+
+  uint32_t nowMs = millis();
+  if (nowMs - lastPulseMs >= 45) {
+    lastPulseMs = nowMs;
+    if (pulse >= 240) pulseDir = -6;
+    if (pulse <= 90)  pulseDir =  6;
+    pulse = (uint8_t)(pulse + pulseDir);
+  }
+
+  time_t nowUtc = time(nullptr);
+  uint32_t elapsedMs = 0;
+  if (raceStartUtc > 0 && nowUtc > raceStartUtc)
+    elapsedMs = (uint32_t)(nowUtc - raceStartUtc) * 1000UL;
+
+  uint8_t barsLit;
+  if (elapsedMs >= RACE_BATTERY_DRAIN_MS) {
+    barsLit = 0;
+  } else {
+    uint32_t remaining = RACE_BATTERY_DRAIN_MS - elapsedMs;
+    uint8_t percent = (uint8_t)((remaining * 100UL) / RACE_BATTERY_DRAIN_MS);
+    if (percent == 0) barsLit = 0;
+    else if (percent <= 25) barsLit = 1;
+    else if (percent <= 50) barsLit = 2;
+    else if (percent <= 75) barsLit = 3;
+    else barsLit = 4;
+  }
+
+  const uint8_t base = NUM_LEDS - 4;
+  for (uint8_t i = 0; i < 4; i++) leds[base + i] = CRGB::Black;
+
+  for (uint8_t i = 0; i < barsLit; i++) {
+    uint8_t b = (i == (uint8_t)(barsLit - 1)) ? pulse : 200;
+    leds[base + i] = CRGB(b, 0, 0);
+  }
+
   FastLED.show();
 }
 

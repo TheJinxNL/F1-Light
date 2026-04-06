@@ -38,6 +38,10 @@
 // How often (ms) to poll Index.json to check whether a session window is active
 #define F1_POLL_INTERVAL_MS  60000UL  // 1 minute
 
+// Race battery overlay: time-based drain duration in LIVE race sessions.
+// Adjust this to tune how quickly the last 4 LEDs drain from full to empty.
+#define RACE_BATTERY_DRAIN_MS (90UL * 60UL * 1000UL)  // 90 minutes
+
 // Pre/post buffer around the scheduled session window (ms)
 #define F1_PRE_WINDOW_MS    (30UL * 60UL * 1000UL)   // 30 min before
 #define F1_POST_WINDOW_MS   (30UL * 60UL * 1000UL)   // 30 min after
@@ -51,6 +55,7 @@
 // ─── Brightness ───────────────────────────────────────────────────────────────
 #define MAX_BRIGHTNESS 200     // 0–255 (keep below 255 to limit current draw)
 #define DIM_BRIGHTNESS  50
+#define IDLE_BASE_RED  180     // 0–255 red channel level for idle base LEDs
 
 // ─── Timing (milliseconds) ────────────────────────────────────────────────────
 #define START_LIGHT_INTERVAL  1000  // Delay between each red light turning on

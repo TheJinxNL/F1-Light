@@ -42,6 +42,7 @@
 #include <WebSocketsClient.h>
 #include <ArduinoJson.h>
 #include <time.h>
+#include <ctype.h>
 
 // ─── Internal constants ───────────────────────────────────────────────────────
 
@@ -108,7 +109,17 @@ static bool     g_needScheduleFetch     = true;   // fetch event-tracker on next
 static uint32_t g_wifiRetryMs           = 0;      // millis() when to next attempt WiFiManager portal
 static String   g_signalrEncodedToken   = "";     // URL-encoded token saved for /start call
 static String   g_signalrCookie         = "";     // raw Set-Cookie from negotiate, forwarded to /start
+static bool     g_activeSessionIsRace   = false;  // true if current active session name contains "Race"
+static time_t   g_activeSessionStartUtc = 0;      // UTC start of currently active session
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+
+static bool containsRaceWord(const char* s) {
+  if (!s) return false;
+  for (const char* p = s; *p; ++p) {
+    if (strncasecmp(p, "Race", 4) == 0) return true;
+  }
+  return false;
+}
 
 /** Return current UTC epoch seconds (requires NTP sync). */
 static time_t utcNow() {
@@ -243,6 +254,11 @@ static bool isSessionWindowActive() {
   Serial.printf("[F1] Index.json OK — %d meeting(s) parsed\n", meetings.size());
 
   bool windowActive = false;
+  bool selectedMeta = false;
+
+  // Reset active-session metadata and repopulate if a matching window is found.
+  g_activeSessionIsRace   = false;
+  g_activeSessionStartUtc = 0;
 
   for (JsonObject meeting : meetings) {
     // Sessions can be a JSON array OR a JSON object (dict keyed by session index).
@@ -287,6 +303,11 @@ static bool isSessionWindowActive() {
                       (long)((windowEnd - now) / 60));
         windowActive = true;
         if (windowEnd > g_windowEndUtc) g_windowEndUtc = windowEnd;
+        if (!selectedMeta) {
+          selectedMeta = true;
+          g_activeSessionStartUtc = sessionStart;
+          g_activeSessionIsRace   = containsRaceWord(sName);
+        }
       } else {
         long secsUntil = (long)(windowStart - now);
         if (secsUntil > 0) {
@@ -676,6 +697,8 @@ static void onWsEvent(WStype_t type, uint8_t* payload, size_t length) {
             g_nextPollMs    = millis() + F1_POST_WINDOW_MS;
             g_needScheduleFetch = true;
             g_needChampFetch    = true;
+            g_activeSessionIsRace   = false;
+            g_activeSessionStartUtc = 0;
           }
         }
       }
@@ -699,6 +722,8 @@ static void onWsEvent(WStype_t type, uint8_t* payload, size_t length) {
           g_nextPollMs    = millis() + F1_POST_WINDOW_MS;
           g_needScheduleFetch = true;
           g_needChampFetch    = true;
+          g_activeSessionIsRace   = false;
+          g_activeSessionStartUtc = 0;
           break;
         }
 
@@ -1105,6 +1130,8 @@ void f1LiveLoop() {
         g_nextPollMs    = now + F1_POST_WINDOW_MS;  // override: delay re-poll
         g_needScheduleFetch = true;
         g_needChampFetch    = true;
+        g_activeSessionIsRace   = false;
+        g_activeSessionStartUtc = 0;
       }
     }
     return;
@@ -1136,6 +1163,8 @@ void f1LiveLoop() {
         g_backoffMs         = BACKOFF_MIN_MS;  // reset back-off for next session
         g_needScheduleFetch = true;
         g_needChampFetch    = true;
+        g_activeSessionIsRace   = false;
+        g_activeSessionStartUtc = 0;
         g_state             = F1State::IDLE;
         g_nextPollMs        = now + F1_POLL_INTERVAL_MS;
         return;
@@ -1152,6 +1181,8 @@ void f1LiveLoop() {
         g_windowEndUtc = 0;  // reset so a future window can be detected fresh
         g_needScheduleFetch = true;
         g_needChampFetch    = true;
+        g_activeSessionIsRace   = false;
+        g_activeSessionStartUtc = 0;
         g_state        = F1State::IDLE;
         g_nextPollMs   = now + F1_POLL_INTERVAL_MS;
       } else {
@@ -1187,6 +1218,14 @@ F1State f1GetState() {
 
 TrackStatus f1GetTrackStatus() {
   return g_trackStatus;
+}
+
+bool f1IsRaceSessionActive() {
+  return g_activeSessionIsRace;
+}
+
+time_t f1GetActiveSessionStartUtc() {
+  return g_activeSessionStartUtc;
 }
 
 const char* trackStatusName(TrackStatus s) {

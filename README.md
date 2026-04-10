@@ -13,9 +13,9 @@ Inspiration on how to access the F1 Live Feeds: https://github.com/Nicxe/f1_sens
 ## Features
 
 - **Live track status** via the official F1 SignalR feed — no third-party API key needed
-- **LED effects** for every flag condition: Green, Yellow, Safety Car, VSC, Red Flag
+- **LED effects** for every flag condition: Green, Yellow, Safety Car, VSC, VSC Ending, Red Flag
 - **Race battery overlay** — during Race sessions, the last 4 LEDs drain over time like an EV battery indicator
-- **Session-end celebration** — chequered flag LED sweep + "FINISHED" screen when a session ends
+- **Session-end celebration** — chequered flag LED sweep + 3× white flash + fade + "FINISHED" screen when a session ends
 - **Reconnect resilience** — display and LEDs hold the last known track status during a SignalR reconnect
 - **Upcoming screen** — next race name, up to 3 sessions with local times; alternates every 10 s with the standings screen
 - **Championship standings screen** — top 6 drivers with position badge, code, and points; fetched from the Ergast mirror
@@ -24,6 +24,8 @@ Inspiration on how to access the F1 Live Feeds: https://github.com/Nicxe/f1_sens
 - **WiFi reset button** — hold GPIO 0 (BOOT button) at power-on to wipe credentials and re-configure
 - **Dimmable backlight** — reduced brightness at idle, full brightness during a live session
 - **Auto-reconnect** with exponential back-off on SignalR disconnect
+- **Web settings UI** — browser-accessible settings page (LED brightness, idle battery bar style) with persistent NVS storage; URL shown on display at boot
+- **Track status test mode** — trigger any flag condition or the session-finished animation directly from the web UI without waiting for a live session
 
 ---
 
@@ -80,6 +82,8 @@ F1_Light/
 ├── effects.cpp                         — LED effect implementations (non-blocking, millis-based)
 ├── display.h                           — TFT display declarations
 ├── display.cpp                         — ST7789 display driver (Adafruit GFX)
+├── web_ui.h                            — Web settings server declarations
+├── web_ui.cpp                          — HTTP settings server on port 80 (brightness, idle style, test mode)
 ├── f1logo.h / f1logo.cpp               — F1 logo bitmap (RGB565)
 ├── Formula1_Display_Regular11pt7b.h    — Custom F1 font (large — session names, lap info)
 └── Formula1_Display_Regular7pt7b.h     — Custom F1 font (small — labels, times, standings)
@@ -123,7 +127,10 @@ Select board **ESP32 Dev Module**, choose your COM port, click **Upload**.
 ### 5. First-boot WiFi setup
 On first boot the display shows a blue **SETUP** screen. Connect your phone/laptop to the Wi-Fi network named **`F1-Light-Setup`**, open a browser, go to **`192.168.4.1`**, and pick your home network. Credentials are saved permanently.
 
-### 6. Monitor
+### 6. Web Settings
+After connecting to WiFi, the display briefly shows the web settings URL (e.g. `http://192.168.1.42`). Open it in a browser to adjust LED brightness, idle style, or test track status effects.
+
+### 7. Monitor
 Open **Serial Monitor** at **115200 baud** to see connection progress, parsed sessions and track status updates.
 
 ---
@@ -137,8 +144,9 @@ Open **Serial Monitor** at **115200 baud** to see connection progress, parsed se
 | Connecting to SignalR | Gentle blue breathing |
 | 🟢 Green flag | Solid green |
 | 🟡 Yellow flag | Fast yellow blink |
-| 🚗 Safety Car | Alternating blue/yellow chase |
+| 🚗 Safety Car | Alternating blue/yellow — grouped 9 / 5 / 4 block pattern |
 | 🟠 VSC | Slow orange pulse |
+| 🟢 VSC Ending | Pulsating green (ramps between dim and full brightness) |
 | 🔴 Red flag | Rapid red flash |
 | Race session overlay | Last 4 LEDs show a draining battery bar over race duration |
 | 🏁 Session finished | Chequered sweep → 3× white flash → fade (~3 s) |
@@ -151,10 +159,13 @@ Open **Serial Monitor** at **115200 baud** to see connection progress, parsed se
 |-------|--------|
 | WiFi / NTP | Grey header + connecting text |
 | WiFiManager portal | Blue header + AP name + `192.168.4.1` |
+| Web settings URL | Red header + "WEB SETTINGS" + `http://<ip>` — shown briefly at boot |
 | Idle — schedule | F1 logo header + next race name + up to 3 upcoming sessions with local times |
 | Idle — standings | F1 logo header + top 6 driver championship standings |
 | 5-min countdown | Session name + large countdown timer |
-| Live | Full-screen flag-colour background + large status text (all session types) |
+| Live — Green flag | Full-screen green background + "ALL CLEAR" |
+| Live — VSC Ending | Full-screen green background + "VSC ENDING" |
+| Live — other flags | Full-screen flag-colour background + large status text |
 | Session finished | Chequered flag pattern + "FINISHED" text |
 
 ---
@@ -167,7 +178,9 @@ All constants live in [config.h](config.h):
 | ---------|---------|-------------|
 | `LED_PIN` | 18 | GPIO for LED strip data |
 | `NUM_LEDS` | 18 | Number of LEDs |
-| `MAX_BRIGHTNESS` | 200 | LED brightness cap (0–255) |
+| `MAX_BRIGHTNESS` | 200 | LED brightness cap (0–255); overridden at runtime via web UI |
+| `DIM_BRIGHTNESS` | 50 | Reduced LED brightness used for secondary/dim states |
+| `IDLE_BASE_RED` | 180 | Red channel level (0–255) for all LEDs in idle state |
 | `TFT_BL_DEFAULT` | 200 | Backlight brightness at idle (0–255) |
 | `DISPLAY_TZ_POSIX` | `"CET-1CEST,M3.5.0,M10.5.0/3"` | POSIX timezone string used for local display time |
 | `WIFI_MANAGER_AP_NAME` | `"F1-Light-Setup"` | Config portal AP name |
@@ -177,6 +190,23 @@ All constants live in [config.h](config.h):
 | `F1_PRE_WINDOW_MS` | 1 800 000 | Connect to feed this many ms before session starts |
 | `F1_POST_WINDOW_MS` | 1 800 000 | Stay connected this many ms after session ends |
 | `RACE_BATTERY_DRAIN_MS` | 5 400 000 | Time for the Race battery overlay to drain from full to empty |
+
+---
+
+## Web Settings UI
+
+When connected to WiFi, the device hosts an HTTP server on **port 80**. The URL is shown on the display briefly after boot.
+
+Open `http://<device-ip>/` in a browser to access the settings page:
+
+| Setting | Description |
+|---------|-------------|
+| **LED Brightness** | Slider (0–255). Applies immediately; persisted across reboots. |
+| **Idle Battery Bars** | `0` = last LED pulsating (default); `1–4` = that many manual bars with the top bar pulsing. Persisted. |
+| **Track Test Mode** | Toggle on to override live data with a chosen track status for previewing effects. Not persisted. |
+| **Track Status** | Dropdown: Clear / Yellow / Safety Car / Red Flag / VSC / VSC End / Session Finished. Active when test mode is on. |
+
+Settings are stored in ESP32 NVS (non-volatile storage) and survive power cycles.
 
 ---
 

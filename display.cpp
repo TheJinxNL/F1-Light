@@ -280,6 +280,28 @@ void displayShowConnecting() {
   g_tft.setFont(nullptr);
 }
 
+void displayShowWebIp(const char* ipOrUrl) {
+  g_tft.fillScreen(COL_BG);
+  drawHeader("WEB", COL_BLUE);
+
+  g_tft.setFont(&Formula1_Display_Regular7pt7b);
+  g_tft.setTextSize(1);
+  g_tft.setTextColor(COL_WHITE);
+  g_tft.setCursor(8, 62 + FONT1_BASELINE);
+  g_tft.print("Settings page:");
+
+  g_tft.setTextColor(COL_YELLOW);
+  g_tft.setCursor(8, 82 + FONT1_BASELINE);
+  g_tft.print((ipOrUrl && ipOrUrl[0]) ? ipOrUrl : "IP unavailable");
+
+  g_tft.setTextColor(COL_GRAY);
+  g_tft.setCursor(8, 108 + FONT1_BASELINE);
+  g_tft.print("Open in browser to set");
+  g_tft.setCursor(8, 122 + FONT1_BASELINE);
+  g_tft.print("LED brightness.");
+  g_tft.setFont(nullptr);
+}
+
 void displayShowIdle() {
   g_tft.fillScreen(COL_BG);
   drawHeader("Upcoming", COL_RED, COL_WHITE, true);
@@ -431,11 +453,14 @@ void displayShowLive(TrackStatus status) {
   uint16_t    bg, fg;
   const char* mainLabel;
   const char* subLabel  = nullptr;
+  const char* subLabel2 = nullptr;
 
   switch (status) {
     case TrackStatus::CLEAR:
-    case TrackStatus::VSC_END:
       bg = COL_GREEN;  fg = COL_BG;    mainLabel = "CLEAR";    break;
+    case TrackStatus::VSC_END:
+      bg = COL_GREEN;  fg = COL_BG;    mainLabel = "VSC ENDING";
+      break;
     case TrackStatus::YELLOW:
       bg = COL_YELLOW; fg = COL_BG;    mainLabel = "YELLOW";   break;
     case TrackStatus::SC:
@@ -461,7 +486,7 @@ void displayShowLive(TrackStatus status) {
   // Main label — size 3 (18px per char), vertically centred
   int16_t mainW = (int16_t)strlen(mainLabel) * 18;
   int16_t mainX = max((int16_t)4, (int16_t)((TFT_WIDTH - mainW) / 2));
-  int16_t mainY = subLabel
+  int16_t mainY = (subLabel || subLabel2)
                   ? (TFT_HEIGHT / 2 - 28)
                   : (TFT_HEIGHT / 2 - 12);
 
@@ -470,11 +495,14 @@ void displayShowLive(TrackStatus status) {
   g_tft.setCursor(mainX, mainY);
   g_tft.print(mainLabel);
 
-  // Sub-label — FreeSans12pt, centred
+  // Sub-label(s) — FreeSans12pt, centred
   if (subLabel) {
     g_tft.setFont(&Formula1_Display_Regular11pt7b);
     g_tft.setTextSize(1);
-    printCentred(subLabel, TFT_HEIGHT / 2 + 10 + FONT2_BASELINE);
+    int16_t subY = TFT_HEIGHT / 2 + 10 + FONT2_BASELINE;
+    printCentred(subLabel, subY);
+    if (subLabel2)
+      printCentred(subLabel2, subY + 18);
     g_tft.setFont(nullptr);
   }
 }

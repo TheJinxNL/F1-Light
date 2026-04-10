@@ -24,6 +24,9 @@ void displayShowConnecting();
  */
 void displayShowPortal(const char* apName);
 
+/** Boot-time info screen showing the local IP of the web settings page. */
+void displayShowWebIp(const char* ipOrUrl);
+
 /**
  * Idle screen: next race location + upcoming sessions with
  * dates and times converted to the local timezone defined by DISPLAY_TZ_POSIX (DST-aware).

@@ -1,5 +1,6 @@
 #include "effects.h"
 #include "config.h"
+#include "web_ui.h"
 
 // ─── Utility ──────────────────────────────────────────────────────────────────
 
@@ -63,8 +64,19 @@ void effectIdle() {
 
   // Idle base: all LEDs on dim red, last LED pulses brighter/dimmer.
   fill_solid(leds, NUM_LEDS, CRGB(IDLE_BASE_RED, 0, 0));
-  if (NUM_LEDS > 0)
+
+  uint8_t idleBars = webUiGetIdleBatteryBars();
+  if (idleBars > 0 && NUM_LEDS >= 4) {
+    if (idleBars > 4) idleBars = 4;
+    uint8_t base = NUM_LEDS - 4;
+    for (uint8_t i = 0; i < 4; i++) leds[base + i] = CRGB::Black;
+    for (uint8_t i = 0; i < idleBars; i++) {
+      uint8_t red = (i == (uint8_t)(idleBars - 1)) ? g_idlePulse : IDLE_BASE_RED;
+      leds[base + i] = CRGB(red, 0, 0);
+    }
+  } else if (NUM_LEDS > 0) {
     leds[NUM_LEDS - 1] = CRGB(g_idlePulse, 0, 0);
+  }
 
   FastLED.show();
 
@@ -144,10 +156,8 @@ void effectRaceBatteryOverlay(bool raceSession, time_t raceStartUtc) {
 
 /** Solid green — all clear. */
 void effectClear() {
-  // Only update when we first enter this state; afterwards do nothing.
-  static TrackStatus lastCalled = TrackStatus::UNKNOWN;
-  if (lastCalled == TrackStatus::CLEAR) return;
-  lastCalled = TrackStatus::CLEAR;
+  // Always paint the strip green when CLEAR is active.
+  // Status-change throttling is already handled by effectTrackStatus().
   fillSolid(COLOR_GREEN);
 }
 
@@ -174,11 +184,20 @@ void effectSafetyCar() {
   if (now - lastMs < BLINK_INTERVAL) return;
   lastMs = now;
 
+  const CRGB cA = phase ? COLOR_BLUE   : COLOR_YELLOW;
+  const CRGB cB = phase ? COLOR_YELLOW : COLOR_BLUE;
+
+  // Requested grouping: first 9, next 5, last 4.
   for (uint8_t i = 0; i < NUM_LEDS; i++) {
-    // Odd/even interleave flips each cycle
-    bool even = (i % 2 == 0);
-    leds[i] = ((even ^ phase)) ? COLOR_BLUE : COLOR_YELLOW;
+    if (i < 9) {
+      leds[i] = cA;          // group 1
+    } else if (i < 14) {
+      leds[i] = cB;          // group 2
+    } else {
+      leds[i] = cA;          // group 3 (last 4)
+    }
   }
+
   FastLED.show();
   phase = !phase;
 }
@@ -219,7 +238,20 @@ void effectRedFlag() {
 
 /** VSC_END: treat the same as CLEAR for now. */
 static void effectVscEnd() {
-  fillSolid(COLOR_GREEN);
+  static uint32_t lastMs = 0;
+  static uint8_t  bright = 40;
+  static int8_t   dir    = 4;
+
+  uint32_t now = millis();
+  if (now - lastMs < 25) return;
+  lastMs = now;
+
+  if (bright >= MAX_BRIGHTNESS) dir = -4;
+  if (bright <= 20)             dir =  4;
+  bright += dir;
+
+  fill_solid(leds, NUM_LEDS, CRGB(0, bright, 0));
+  FastLED.show();
 }
 
 // ─── Dispatcher ───────────────────────────────────────────────────────────────
@@ -245,8 +277,8 @@ void effectTrackStatus(TrackStatus status) {
   }
 
   switch (status) {
-    case TrackStatus::CLEAR:
-    case TrackStatus::VSC_END: effectClear();    break;
+    case TrackStatus::CLEAR:   effectClear();    break;
+    case TrackStatus::VSC_END: effectVscEnd();   break;
     case TrackStatus::YELLOW:  effectYellow();   break;
     case TrackStatus::SC:      effectSafetyCar();break;
     case TrackStatus::VSC:     effectVSC();      break;

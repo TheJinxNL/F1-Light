@@ -8,10 +8,12 @@
  */
 
 #include <FastLED.h>
+#include <WiFi.h>
 #include "config.h"
 #include "effects.h"
 #include "display.h"
 #include "f1_live.h"
+#include "web_ui.h"
 
 // ─── LED array (shared with effects.cpp via extern) ───────────────────────────
 CRGB leds[NUM_LEDS];
@@ -26,6 +28,10 @@ static uint8_t     s_idleView         = 0;   // 0 = schedule, 1 = championship
 static uint32_t    s_lastViewSwitchMs = 0;
 static bool        s_inCountdown      = false;
 static uint32_t    s_lastCountdownMs  = 0;
+static bool        s_webIpShown       = false;
+static uint32_t    s_webIpShownAtMs   = 0;
+static bool        s_prevTestMode     = false;
+static uint8_t     s_prevTestCode     = 0;
 
 // ─── setup() ──────────────────────────────────────────────────────────────────
 void setup() {
@@ -43,19 +49,82 @@ void setup() {
 
 // ─── loop() ───────────────────────────────────────────────────────────────────
 void loop() {
+  // Keep the lightweight settings web server active while WiFi is up.
+  if (WiFi.status() == WL_CONNECTED) {
+    if (!webUiIsRunning()) {
+      webUiBegin();
+      if (webUiIsRunning()) {
+        displayShowWebIp(webUiGetUrl());
+        s_webIpShown     = true;
+        s_webIpShownAtMs = millis();
+      }
+    }
+    webUiLoop();
+  } else {
+    webUiStop();
+    s_webIpShown = false;
+  }
+
+  FastLED.setBrightness(webUiGetLedBrightness());
   f1LiveLoop();
 
   F1State     state  = f1GetState();
   TrackStatus status = f1GetTrackStatus();
+  bool testMode      = webUiTrackTestEnabled();
+  uint8_t testCode   = webUiTrackTestStatusCode();
+  TrackStatus testStatus = TrackStatus::CLEAR;
+  switch (testCode) {
+    case 1: testStatus = TrackStatus::CLEAR;   break;
+    case 2: testStatus = TrackStatus::YELLOW;  break;
+    case 4: testStatus = TrackStatus::SC;      break;
+    case 5: testStatus = TrackStatus::RED;     break;
+    case 6: testStatus = TrackStatus::VSC;     break;
+    case 7: testStatus = TrackStatus::VSC_END; break;
+    default: testStatus = TrackStatus::CLEAR;  break;
+  }
   bool stateChanged  = (state != s_prevState);
   s_prevState        = state;
+
+  // WebUI track-status test mode: preview LED animation + live screen override.
+  if (testMode && state != F1State::WIFI_CONNECTING &&
+      state != F1State::NTP_SYNC && state != F1State::SESSION_ENDED) {
+    if (testCode == 99) {
+      bool testChanged = (!s_prevTestMode) || (s_prevTestCode != 99) || stateChanged;
+      if (testChanged) {
+        displayShowFinished();
+        effectSessionFinished();
+      } else {
+        displayShowFinished();
+      }
+
+      s_prevTestMode = true;
+      s_prevTestCode = 99;
+      return;
+    }
+
+    effectTrackStatus(testStatus);
+
+    bool testChanged = (!s_prevTestMode) || (testCode != s_prevTestCode) || stateChanged;
+    if (testChanged) displayShowLive(testStatus);
+
+    s_prevTestMode = true;
+    s_prevTestCode = testCode;
+    return;
+  }
+
+  if (s_prevTestMode) {
+    // Force fresh redraws when leaving test mode.
+    s_prevStatus = TrackStatus::UNKNOWN;
+  }
+  s_prevTestMode = false;
 
   // ── State-transition actions ──────────────────────────────────────────────
   if (stateChanged) {
     switch (state) {
       case F1State::WIFI_CONNECTING:
       case F1State::NTP_SYNC:
-        displayShowConnecting();
+        if (!s_webIpShown || (millis() - s_webIpShownAtMs > 3000))
+          displayShowConnecting();
         break;
 
       case F1State::IDLE:

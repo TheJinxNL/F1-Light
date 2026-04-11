@@ -24,8 +24,10 @@ Inspiration on how to access the F1 Live Feeds: https://github.com/Nicxe/f1_sens
 - **WiFi reset button** — hold GPIO 0 (BOOT button) at power-on to wipe credentials and re-configure
 - **Dimmable backlight** — reduced brightness at idle, full brightness during a live session
 - **Auto-reconnect** with exponential back-off on SignalR disconnect
-- **Web settings UI** — browser-accessible settings page (LED brightness, idle battery bar style) with persistent NVS storage; URL shown on display at boot
+- **Web settings UI** — browser-accessible settings page (LED brightness, idle battery level, test mode, reboot) with persistent NVS storage; URL shown on display at boot
 - **Track status test mode** — trigger any flag condition or the session-finished animation directly from the web UI without waiting for a live session
+- **Boot-time OTA check** — checks a remote manifest, installs newer firmware, and reboots automatically
+- **OTA status screen** — shows OTA check / download / install progress on the TFT during boot
 
 ---
 
@@ -124,6 +126,9 @@ Adjust GPIO pins if your wiring differs. Set `DISPLAY_TZ_POSIX` to your local ti
 ### 4. Upload
 Select board **ESP32 Dev Module**, choose your COM port, click **Upload**.
 
+> For OTA support, use a partition scheme with two app slots, e.g.
+> **No FS 4MB (2MB App/OTA)** in Arduino IDE.
+
 ### 5. First-boot WiFi setup
 On first boot the display shows a blue **SETUP** screen. Connect your phone/laptop to the Wi-Fi network named **`F1-Light-Setup`**, open a browser, go to **`192.168.4.1`**, and pick your home network. Credentials are saved permanently.
 
@@ -140,7 +145,7 @@ Open **Serial Monitor** at **115200 baud** to see connection progress, parsed se
 | State | Effect |
 |-------|--------|
 | WiFi / NTP connecting | Breathing white |
-| Idle (no session) | All LEDs dim red, last LED slowly pulsating |
+| Idle (no session) | All LEDs dim red, last 4 LEDs show battery level (1–4) with top bar pulsing |
 | Connecting to SignalR | Gentle blue breathing |
 | 🟢 Green flag | Solid green |
 | 🟡 Yellow flag | Fast yellow blink |
@@ -158,6 +163,7 @@ Open **Serial Monitor** at **115200 baud** to see connection progress, parsed se
 | State | Screen |
 |-------|--------|
 | WiFi / NTP | Grey header + connecting text |
+| OTA during boot | Blue OTA header + current OTA stage/status |
 | WiFiManager portal | Blue header + AP name + `192.168.4.1` |
 | Web settings URL | Red header + "WEB SETTINGS" + `http://<ip>` — shown briefly at boot |
 | Idle — schedule | F1 logo header + next race name + up to 3 upcoming sessions with local times |
@@ -187,6 +193,12 @@ All constants live in [config.h](config.h):
 | `WIFI_MANAGER_TIMEOUT` | 180 | Portal auto-close timeout (seconds) |
 | `WIFI_RESET_PIN` | 0 | GPIO held LOW at boot to reset WiFi credentials |
 | `F1_POLL_INTERVAL_MS` | 60000 | How often to poll the F1 schedule (ms) |
+| `FW_VERSION` | `"1.0.4"` | Current firmware version used for OTA comparison |
+| `OTA_BOOT_CHECK_ENABLED` | 1 | Enable/disable boot-time OTA check |
+| `OTA_MANIFEST_URL` | `"https://www.jinx.nl/f1-light/update/manifest.json"` | Remote OTA manifest URL |
+| `OTA_MANIFEST_TIMEOUT_MS` | 7000 | Manifest request timeout (ms) |
+| `OTA_FIRMWARE_TIMEOUT_MS` | 20000 | Firmware download timeout (ms) |
+| `OTA_ALLOW_INSECURE_TLS` | 1 | `1` skips TLS cert validation (dev only); `0` for production cert pinning/validation |
 | `F1_PRE_WINDOW_MS` | 1 800 000 | Connect to feed this many ms before session starts |
 | `F1_POST_WINDOW_MS` | 1 800 000 | Stay connected this many ms after session ends |
 | `RACE_BATTERY_DRAIN_MS` | 5 400 000 | Time for the Race battery overlay to drain from full to empty |
@@ -202,11 +214,31 @@ Open `http://<device-ip>/` in a browser to access the settings page:
 | Setting | Description |
 |---------|-------------|
 | **LED Brightness** | Slider (0–255). Applies immediately; persisted across reboots. |
-| **Idle Battery Bars** | `0` = last LED pulsating (default); `1–4` = that many manual bars with the top bar pulsing. Persisted. |
+| **Idle Battery Level** | Fixed range `1–4`; shows that many bars with the top bar pulsing. Persisted. |
 | **Track Test Mode** | Toggle on to override live data with a chosen track status for previewing effects. Not persisted. |
 | **Track Status** | Dropdown: Clear / Yellow / Safety Car / Red Flag / VSC / VSC End / Session Finished. Active when test mode is on. |
+| **Reboot Device** | Reboots the device from the web UI after confirmation. |
 
 Settings are stored in ESP32 NVS (non-volatile storage) and survive power cycles.
+
+### OTA Manifest Format
+
+When `OTA_BOOT_CHECK_ENABLED` is on, the device checks `OTA_MANIFEST_URL` once during boot.
+
+Expected JSON:
+
+```json
+{
+	"version": "1.0.5",
+	"firmwareUrl": "https://www.jinx.nl/f1-light/update/F1_Light-1.0.5.bin",
+	"md5": "optional_md5_hash"
+}
+```
+
+Notes:
+- `firmwareUrl` (or `url`) is required.
+- `md5` is optional but recommended.
+- Upload the sketch app binary (`F1_Light.ino.bin`), not bootloader/partitions binaries.
 
 ---
 

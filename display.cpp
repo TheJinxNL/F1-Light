@@ -302,6 +302,23 @@ void displayShowWebIp(const char* ipOrUrl) {
   g_tft.setFont(nullptr);
 }
 
+void displayShowOtaStatus(const char* title, const char* detail) {
+  g_tft.fillScreen(COL_BG);
+  drawHeader("OTA", COL_BLUE);
+
+  g_tft.setFont(&Formula1_Display_Regular11pt7b);
+  g_tft.setTextSize(1);
+  g_tft.setTextColor(COL_WHITE);
+  printCentred((title && title[0]) ? title : "Checking update", 94 + FONT2_BASELINE);
+  g_tft.setFont(nullptr);
+
+  g_tft.setFont(&Formula1_Display_Regular7pt7b);
+  g_tft.setTextSize(1);
+  g_tft.setTextColor(COL_GRAY);
+  printCentred((detail && detail[0]) ? detail : "Please wait...", 122 + FONT1_BASELINE);
+  g_tft.setFont(nullptr);
+}
+
 void displayShowIdle() {
   g_tft.fillScreen(COL_BG);
   drawHeader("Upcoming", COL_RED, COL_WHITE, true);

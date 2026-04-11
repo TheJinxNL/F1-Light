@@ -41,6 +41,7 @@
 #include <WiFiManager.h>   // tzapu/WiFiManager
 #include <WebSocketsClient.h>
 #include <ArduinoJson.h>
+#include <Update.h>
 #include <time.h>
 #include <ctype.h>
 
@@ -122,7 +123,185 @@ static String   g_signalrEncodedToken   = "";     // URL-encoded token saved for
 static String   g_signalrCookie         = "";     // raw Set-Cookie from negotiate, forwarded to /start
 static bool     g_activeSessionIsRace   = false;  // true if current active session name contains "Race"
 static time_t   g_activeSessionStartUtc = 0;      // UTC start of currently active session
+static bool     g_bootOtaChecked        = false;  // one-shot guard for boot-time OTA check
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+
+static int compareVersionText(const char* current, const char* remote) {
+  // Compare dotted numeric versions like 1.2.3 (supports leading "v").
+  auto readPart = [](const char*& s) -> int {
+    while (*s && !isdigit((unsigned char)*s)) s++;
+    int v = 0;
+    while (isdigit((unsigned char)*s)) {
+      v = v * 10 + (*s - '0');
+      s++;
+    }
+    if (*s == '.') s++;
+    return v;
+  };
+
+  const char* a = current ? current : "0";
+  const char* b = remote  ? remote  : "0";
+  for (uint8_t i = 0; i < 4; i++) {
+    int av = readPart(a);
+    int bv = readPart(b);
+    if (av < bv) return -1;
+    if (av > bv) return 1;
+  }
+  return 0;
+}
+
+static bool otaInstallFirmware(const char* firmwareUrl, const char* md5) {
+  if (!firmwareUrl || !firmwareUrl[0]) return false;
+
+  displayShowOtaStatus("New Firmware", "Downloading...");
+  Serial.printf("[OTA] Downloading firmware: %s\n", firmwareUrl);
+  WiFiClientSecure tls;
+#if OTA_ALLOW_INSECURE_TLS
+  tls.setInsecure();
+#endif
+
+  HTTPClient http;
+  if (!http.begin(tls, firmwareUrl)) {
+    Serial.println("[OTA] HTTP begin failed");
+    return false;
+  }
+
+  http.setTimeout(OTA_FIRMWARE_TIMEOUT_MS);
+  http.addHeader("Accept-Encoding", "identity");
+
+  int code = http.GET();
+  if (code != 200) {
+    Serial.printf("[OTA] Firmware HTTP %d\n", code);
+    http.end();
+    return false;
+  }
+
+  int contentLen = http.getSize();
+  if (contentLen <= 0) {
+    Serial.println("[OTA] Invalid content length");
+    http.end();
+    return false;
+  }
+
+  displayShowOtaStatus("Installing", "Writing flash...");
+  if (!Update.begin((size_t)contentLen)) {
+    Serial.printf("[OTA] Update begin failed (err=%u)\n", (unsigned)Update.getError());
+    http.end();
+    return false;
+  }
+
+  if (md5 && md5[0]) {
+    if (!Update.setMD5(md5)) {
+      Serial.println("[OTA] Invalid MD5 format in manifest");
+      Update.abort();
+      http.end();
+      return false;
+    }
+  }
+
+  WiFiClient* stream = http.getStreamPtr();
+  size_t written = Update.writeStream(*stream);
+  http.end();
+
+  if (written != (size_t)contentLen) {
+    Serial.printf("[OTA] Incomplete write (%u/%u bytes)\n",
+                  (unsigned)written, (unsigned)contentLen);
+    Update.abort();
+    return false;
+  }
+
+  if (!Update.end()) {
+    Serial.printf("[OTA] Update end failed (err=%u)\n", (unsigned)Update.getError());
+    return false;
+  }
+
+  if (!Update.isFinished()) {
+    Serial.println("[OTA] Update not finished");
+    return false;
+  }
+
+  Serial.println("[OTA] Firmware install complete");
+  return true;
+}
+
+static void otaCheckAtBoot() {
+#if !OTA_BOOT_CHECK_ENABLED
+  return;
+#else
+  if (g_bootOtaChecked) return;
+  g_bootOtaChecked = true;
+
+  displayShowOtaStatus("Checking", "Looking for updates...");
+  Serial.printf("[OTA] Checking manifest: %s\n", OTA_MANIFEST_URL);
+  WiFiClientSecure tls;
+#if OTA_ALLOW_INSECURE_TLS
+  tls.setInsecure();
+#endif
+
+  HTTPClient http;
+  if (!http.begin(tls, OTA_MANIFEST_URL)) {
+    displayShowOtaStatus("OTA Check", "Manifest request failed");
+    Serial.println("[OTA] Manifest HTTP begin failed");
+    delay(600);
+    return;
+  }
+
+  http.setTimeout(OTA_MANIFEST_TIMEOUT_MS);
+  http.addHeader("Accept-Encoding", "identity");
+  http.addHeader("Accept", "application/json");
+
+  int code = http.GET();
+  if (code != 200) {
+    displayShowOtaStatus("OTA Check", "Manifest unavailable");
+    Serial.printf("[OTA] Manifest HTTP %d\n", code);
+    http.end();
+    delay(600);
+    return;
+  }
+
+  JsonDocument doc;
+  DeserializationError err = deserializeJson(doc, http.getStream());
+  http.end();
+  if (err) {
+    displayShowOtaStatus("OTA Check", "Manifest parse error");
+    Serial.printf("[OTA] Manifest JSON error: %s\n", err.c_str());
+    delay(600);
+    return;
+  }
+
+  const char* version = doc["version"] | "";
+  const char* url     = doc["firmwareUrl"] | doc["url"] | "";
+  const char* md5     = doc["md5"] | "";
+
+  if (!version[0] || !url[0]) {
+    displayShowOtaStatus("OTA Check", "Invalid manifest");
+    Serial.println("[OTA] Manifest missing version or firmwareUrl");
+    delay(600);
+    return;
+  }
+
+  int cmp = compareVersionText(FW_VERSION, version);
+  if (cmp >= 0) {
+    displayShowOtaStatus("Up to date", FW_VERSION);
+    Serial.printf("[OTA] Up-to-date (local=%s, remote=%s)\n", FW_VERSION, version);
+    delay(700);
+    return;
+  }
+
+  displayShowOtaStatus("Update Found", version);
+  Serial.printf("[OTA] New firmware available: %s -> %s\n", FW_VERSION, version);
+  if (otaInstallFirmware(url, md5)) {
+    displayShowOtaStatus("Update Complete", "Rebooting...");
+    Serial.println("[OTA] Rebooting into updated firmware...");
+    delay(900);
+    ESP.restart();
+  } else {
+    displayShowOtaStatus("Update Failed", "Continuing boot");
+    Serial.println("[OTA] Update failed, continuing normal boot");
+    delay(900);
+  }
+#endif
+}
 
 static bool containsRaceWord(const char* s) {
   if (!s) return false;
@@ -983,6 +1162,7 @@ void f1LiveLoop() {
       Serial.printf("[F1] NTP synced: %04d-%02d-%02dT%02d:%02d:%02dZ\n",
                     t.tm_year + 1900, t.tm_mon + 1, t.tm_mday,
                     t.tm_hour, t.tm_min, t.tm_sec);
+      otaCheckAtBoot();
       g_state      = F1State::IDLE;
       g_nextPollMs = 0;  // force immediate poll (now >= 0 is always true)
     }

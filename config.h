@@ -38,6 +38,20 @@
 // How often (ms) to poll Index.json to check whether a session window is active
 #define F1_POLL_INTERVAL_MS  60000UL  // 1 minute
 
+// ─── OTA update checks ───────────────────────────────────────────────────────
+// Firmware version used for boot-time update checks.
+#define FW_VERSION "1.0.4"
+// Boot-time OTA is optional; set to 0 to disable remote update checks.
+#define OTA_BOOT_CHECK_ENABLED 1
+// Manifest endpoint checked once per boot after WiFi + NTP are ready.
+#define OTA_MANIFEST_URL "https://www.jinx.nl/f1-light/update/manifest.json"
+// HTTPS timeout for manifest request (ms).
+#define OTA_MANIFEST_TIMEOUT_MS 7000
+// HTTPS timeout for firmware download request (ms).
+#define OTA_FIRMWARE_TIMEOUT_MS 20000
+// For production, prefer certificate pinning. 1 = insecure TLS.
+#define OTA_ALLOW_INSECURE_TLS 1
+
 // Race battery overlay: time-based drain duration in LIVE race sessions.
 // Adjust this to tune how quickly the last 4 LEDs drain from full to empty.
 #define RACE_BATTERY_DRAIN_MS (90UL * 60UL * 1000UL)  // 90 minutes

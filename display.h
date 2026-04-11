@@ -27,6 +27,9 @@ void displayShowPortal(const char* apName);
 /** Boot-time info screen showing the local IP of the web settings page. */
 void displayShowWebIp(const char* ipOrUrl);
 
+/** Boot-time OTA status screen with one required and one optional detail line. */
+void displayShowOtaStatus(const char* title, const char* detail = nullptr);
+
 /**
  * Idle screen: next race location + upcoming sessions with
  * dates and times converted to the local timezone defined by DISPLAY_TZ_POSIX (DST-aware).

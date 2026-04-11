@@ -15,6 +15,8 @@ static uint8_t g_idleBatteryBars = 1;  // 1-4 = manual bars
 static bool g_trackTestMode = false;
 static uint8_t g_trackTestStatus = 1;  // 1=CLEAR,2=YELLOW,4=SC,5=RED,6=VSC,7=VSC_END,99=SESSION_FINISHED
 static char g_url[40] = {0};
+static bool g_rebootPending = false;
+static uint32_t g_rebootAtMs = 0;
 
 static const char* PREF_NAMESPACE = "f1light";
 static const char* PREF_LED_BRIGHT = "ledBright";
@@ -35,6 +37,7 @@ static const char kHtmlPage[] PROGMEM = R"HTML(
     input[type=range]{width:100%;}
     .row{display:flex;justify-content:space-between;align-items:center;}
     button{margin-top:14px;padding:10px 14px;border:0;border-radius:8px;background:#d21f26;color:#fff;font-weight:600;}
+    #reboot{background:#555;margin-left:8px;}
     small{color:#aaa;display:block;margin-top:10px;}
     select{width:100%;padding:10px;border-radius:8px;background:#151515;color:#eee;border:1px solid #333}
   </style>
@@ -65,7 +68,10 @@ static const char kHtmlPage[] PROGMEM = R"HTML(
       <option value='99'>SESSION FINISHED</option>
     </select>
 
-    <button id='save'>Apply</button>
+    <div class='row'>
+      <button id='save'>Apply</button>
+      <button id='reboot' type='button'>Reboot Device</button>
+    </div>
     <small>Changes apply immediately and are persisted.</small>
   </div>
 
@@ -105,6 +111,11 @@ static const char kHtmlPage[] PROGMEM = R"HTML(
       await fetch('/api/idle-battery',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'bars='+encodeURIComponent(ib.value)});
       await fetch('/api/test-track',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'mode='+encodeURIComponent(tm.value)+'&status='+encodeURIComponent(ts.value)});
       await loadState();
+    });
+
+    document.getElementById('reboot').addEventListener('click',async()=>{
+      if (!confirm('Reboot device now?')) return;
+      await fetch('/api/reboot',{method:'POST'});
     });
 
     loadState();
@@ -197,6 +208,12 @@ static void handleSetTestTrack() {
   g_server.send(200, "application/json", "{\"ok\":true}");
 }
 
+static void handleReboot() {
+  g_rebootPending = true;
+  g_rebootAtMs = millis() + 700;
+  g_server.send(200, "application/json", "{\"ok\":true,\"rebooting\":true}");
+}
+
 void webUiBegin() {
   if (g_running) return;
   if (WiFi.status() != WL_CONNECTED) return;
@@ -210,6 +227,7 @@ void webUiBegin() {
   g_server.on("/api/idle-battery", HTTP_POST, handleSetIdleBattery);
   g_server.on("/api/test-track", HTTP_GET, handleGetTestTrack);
   g_server.on("/api/test-track", HTTP_POST, handleSetTestTrack);
+  g_server.on("/api/reboot", HTTP_POST, handleReboot);
   g_server.onNotFound([]() {
     g_server.send(404, "text/plain", "Not found");
   });
@@ -236,6 +254,11 @@ void webUiLoop() {
     return;
   }
   g_server.handleClient();
+  if (g_rebootPending && millis() >= g_rebootAtMs) {
+    g_rebootPending = false;
+    Serial.println("[WebUI] Reboot requested");
+    ESP.restart();
+  }
 }
 
 bool webUiIsRunning() {

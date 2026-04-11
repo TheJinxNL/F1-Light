@@ -217,8 +217,10 @@ void effectSafetyCar() {
       leds[i] = cA;          // group 1
     } else if (i < 14) {
       leds[i] = cB;          // group 2
+    } else if (i < 16) {
+      leds[i] = cB;          // group 3
     } else {
-      leds[i] = cA;          // group 3 (last 4)
+      leds[i] = cA;          // group 4 (last 2)
     }
   }
 

@@ -1398,6 +1398,14 @@ bool f1ScheduleRefreshed() {
   return false;
 }
 
+bool f1BootOtaCheckComplete() {
+#if OTA_BOOT_CHECK_ENABLED
+  return g_bootOtaChecked;
+#else
+  return true;
+#endif
+}
+
 bool f1ChampRefreshed() {
   if (g_champRefreshed) {
     g_champRefreshed = false;

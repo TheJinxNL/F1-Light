@@ -49,8 +49,13 @@ void setup() {
 
 // ─── loop() ───────────────────────────────────────────────────────────────────
 void loop() {
+  FastLED.setBrightness(webUiGetLedBrightness());
+  effectSetAutoShow(false);
+  f1LiveLoop();
+
   // Keep the lightweight settings web server active while WiFi is up.
-  if (WiFi.status() == WL_CONNECTED) {
+  // Do not start it until the boot-time OTA check has completed.
+  if (WiFi.status() == WL_CONNECTED && f1BootOtaCheckComplete()) {
     if (!webUiIsRunning()) {
       webUiBegin();
       if (webUiIsRunning()) {
@@ -64,10 +69,6 @@ void loop() {
     webUiStop();
     s_webIpShown = false;
   }
-
-  FastLED.setBrightness(webUiGetLedBrightness());
-  effectSetAutoShow(false);
-  f1LiveLoop();
 
   F1State     state  = f1GetState();
   TrackStatus status = f1GetTrackStatus();
@@ -85,6 +86,41 @@ void loop() {
   }
   bool stateChanged  = (state != s_prevState);
   s_prevState        = state;
+
+  // Keep the web settings URL visible for a short hold window before any
+  // other display screens are allowed to overwrite it.
+  if (s_webIpShown && (millis() - s_webIpShownAtMs < 3000)) {
+    switch (state) {
+      case F1State::IDLE:
+        effectIdle();
+        break;
+
+      case F1State::CONNECTING:
+      case F1State::RECONNECTING:
+        if (status != TrackStatus::UNKNOWN) {
+          effectTrackStatus(status);
+          effectRaceBatteryOverlay(f1IsRaceSessionActive(), f1GetActiveSessionStartUtc());
+        } else
+          effectConnectingSignalR();
+        break;
+
+      case F1State::LIVE:
+        effectTrackStatus(status);
+        effectRaceBatteryOverlay(f1IsRaceSessionActive(), f1GetActiveSessionStartUtc());
+        break;
+
+      case F1State::WIFI_CONNECTING:
+      case F1State::NTP_SYNC:
+        effectConnecting();
+        break;
+
+      case F1State::SESSION_ENDED:
+        break;
+    }
+
+    effectFlush();
+    return;
+  }
 
   // WebUI track-status test mode: preview LED animation + live screen override.
   if (testMode && state != F1State::WIFI_CONNECTING &&

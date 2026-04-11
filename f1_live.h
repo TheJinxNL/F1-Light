@@ -82,5 +82,8 @@ time_t f1GetActiveSessionStartUtc();
  */
 bool f1ScheduleRefreshed();
 
+/** True when boot-time OTA check is done (or OTA check is disabled). */
+bool f1BootOtaCheckComplete();
+
 /** Human-readable track status string for Serial debug. */
 const char* trackStatusName(TrackStatus s);

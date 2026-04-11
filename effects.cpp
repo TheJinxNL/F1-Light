@@ -2,11 +2,34 @@
 #include "config.h"
 #include "web_ui.h"
 
+static bool g_autoShow = true;
+static bool g_ledDirty = false;
+
+static inline void commitLeds() {
+  if (g_autoShow) {
+    FastLED.show();
+    g_ledDirty = false;
+  } else {
+    g_ledDirty = true;
+  }
+}
+
+void effectSetAutoShow(bool enabled) {
+  g_autoShow = enabled;
+}
+
+void effectFlush() {
+  if (!g_autoShow && g_ledDirty) {
+    FastLED.show();
+    g_ledDirty = false;
+  }
+}
+
 // ─── Utility ──────────────────────────────────────────────────────────────────
 
 void fillSolid(CRGB colour) {
   fill_solid(leds, NUM_LEDS, colour);
-  FastLED.show();
+  commitLeds();
 }
 
 void clearAll() {
@@ -20,7 +43,7 @@ void effectPortal() {
   fill_solid(leds, NUM_LEDS, CRGB::Black);
   for (uint8_t i = NUM_LEDS - 4; i < NUM_LEDS; i++)
     leds[i] = CRGB::Blue;
-  FastLED.show();
+  commitLeds();
 }
 
 /** Slow breathing white — WiFi / NTP not ready. */
@@ -38,7 +61,7 @@ void effectConnecting() {
   bright += dir;
 
   fill_solid(leds, NUM_LEDS, CRGB(bright, bright, bright));
-  FastLED.show();
+  commitLeds();
 }
 
 /** Solid red at 50% brightness — no session active. */
@@ -66,7 +89,8 @@ void effectIdle() {
   fill_solid(leds, NUM_LEDS, CRGB(IDLE_BASE_RED, 0, 0));
 
   uint8_t idleBars = webUiGetIdleBatteryBars();
-  if (idleBars > 0 && NUM_LEDS >= 4) {
+  if (NUM_LEDS >= 4) {
+    if (idleBars < 1) idleBars = 1;
     if (idleBars > 4) idleBars = 4;
     uint8_t base = NUM_LEDS - 4;
     for (uint8_t i = 0; i < 4; i++) leds[base + i] = CRGB::Black;
@@ -78,7 +102,7 @@ void effectIdle() {
     leds[NUM_LEDS - 1] = CRGB(g_idlePulse, 0, 0);
   }
 
-  FastLED.show();
+  commitLeds();
 
   if (g_idlePulse >= IDLE_BASE_RED) g_idleDir = -2;
   if (g_idlePulse <= kIdlePulseMin) g_idleDir =  2;
@@ -100,7 +124,7 @@ void effectConnectingSignalR() {
   bright += dir;
 
   fill_solid(leds, NUM_LEDS, CRGB(0, 0, bright));
-  FastLED.show();
+  commitLeds();
 }
 
 void effectRaceBatteryOverlay(bool raceSession, time_t raceStartUtc) {
@@ -149,7 +173,7 @@ void effectRaceBatteryOverlay(bool raceSession, time_t raceStartUtc) {
     leds[base + i] = CRGB(b, 0, 0);
   }
 
-  FastLED.show();
+  commitLeds();
 }
 
 // ─── Live track status effects (non-blocking) ─────────────────────────────────
@@ -171,7 +195,7 @@ void effectYellow() {
   lastMs = now;
 
   fill_solid(leds, NUM_LEDS, on ? COLOR_YELLOW : COLOR_OFF);
-  FastLED.show();
+  commitLeds();
   on = !on;
 }
 
@@ -198,7 +222,7 @@ void effectSafetyCar() {
     }
   }
 
-  FastLED.show();
+  commitLeds();
   phase = !phase;
 }
 
@@ -218,7 +242,7 @@ void effectVSC() {
 
   // Orange: full R, ~31 % G, no B
   fill_solid(leds, NUM_LEDS, CRGB(bright, (uint8_t)(bright * 0.31f), 0));
-  FastLED.show();
+  commitLeds();
 }
 
 /** Urgent fast red flash — Red flag. */
@@ -232,7 +256,7 @@ void effectRedFlag() {
   lastMs = now;
 
   fill_solid(leds, NUM_LEDS, on ? COLOR_RED : COLOR_OFF);
-  FastLED.show();
+  commitLeds();
   on = !on;
 }
 
@@ -251,7 +275,7 @@ static void effectVscEnd() {
   bright += dir;
 
   fill_solid(leds, NUM_LEDS, CRGB(0, bright, 0));
-  FastLED.show();
+  commitLeds();
 }
 
 // ─── Dispatcher ───────────────────────────────────────────────────────────────

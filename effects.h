@@ -13,6 +13,18 @@ void fillSolid(CRGB colour);
 /** Turn all LEDs off. */
 void clearAll();
 
+/**
+ * Enable/disable automatic FastLED.show() inside effect functions.
+ * When disabled, effects only update the LED buffer and mark it dirty.
+ */
+void effectSetAutoShow(bool enabled);
+
+/**
+ * Flush pending LED buffer updates when auto-show is disabled.
+ * Safe to call each loop; does nothing when there are no pending changes.
+ */
+void effectFlush();
+
 /** Connection / idle state indicators ──────────────────────────────────────
 
 /** Slow breathing white — WiFi/NTP not yet ready. */

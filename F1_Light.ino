@@ -66,6 +66,7 @@ void loop() {
   }
 
   FastLED.setBrightness(webUiGetLedBrightness());
+  effectSetAutoShow(false);
   f1LiveLoop();
 
   F1State     state  = f1GetState();
@@ -99,6 +100,7 @@ void loop() {
 
       s_prevTestMode = true;
       s_prevTestCode = 99;
+      effectFlush();
       return;
     }
 
@@ -109,6 +111,7 @@ void loop() {
 
     s_prevTestMode = true;
     s_prevTestCode = testCode;
+    effectFlush();
     return;
   }
 
@@ -262,4 +265,6 @@ void loop() {
       effectConnecting();
       break;
   }
+
+  effectFlush();
 }

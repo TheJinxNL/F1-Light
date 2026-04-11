@@ -13,7 +13,7 @@ bool webUiIsRunning();
 // Current LED brightness (0-255) controlled via web UI.
 uint8_t webUiGetLedBrightness();
 
-// Idle battery bars for manual override: 0 = disabled, 1-4 = bars on.
+// Idle battery bars: fixed manual range 1-4.
 uint8_t webUiGetIdleBatteryBars();
 
 // Track-status animation test mode (manual override from WebUI).

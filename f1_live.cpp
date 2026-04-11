@@ -73,6 +73,16 @@ static const uint32_t INACTIVITY_TIMEOUT_MS = 45000UL;
 static const uint32_t BACKOFF_MIN_MS  = 5000UL;
 static const uint32_t BACKOFF_MAX_MS  = 60000UL;
 
+// Keep blocking HTTP sections short so loop() latency stays bounded.
+static const uint16_t HTTP_TIMEOUT_INDEX_MS     = 7000;
+static const uint16_t HTTP_TIMEOUT_NEGOTIATE_MS = 6000;
+static const uint16_t HTTP_TIMEOUT_CHAMP_MS     = 7000;
+static const uint16_t HTTP_TIMEOUT_EVENT_MS     = 7000;
+static const uint16_t HTTP_TIMEOUT_START_MS     = 4000;
+
+// Session-window checks in LIVE require an HTTPS fetch; run less often than IDLE polls.
+static const uint32_t LIVE_WINDOW_CHECK_INTERVAL_MS = 5UL * 60UL * 1000UL;
+
 
 // ─── Module state ─────────────────────────────────────────────────────────────
 
@@ -98,6 +108,7 @@ static uint8_t  g_wsFrameCount          = 0;      // frames logged since last co
 static uint32_t g_connectedAtMs         = 0;      // millis() when WStype_CONNECTED fired
 static uint32_t g_lastStreamActivityMs  = 0;      // millis() of last WStype_TEXT frame received
 static uint32_t g_nextPollMs            = 0;      // absolute ms for next IDLE/LIVE poll
+static uint32_t g_nextLiveWindowPollMs  = 0;      // absolute ms for next LIVE window check
 static bool     g_intentionalDisconnect = false;  // set before deliberate g_ws.disconnect()
 static time_t   g_windowEndUtc          = 0;      // UTC epoch when active session window expires
 static uint8_t  g_emptyConnectCount     = 0;      // consecutive connects with no seed data received
@@ -173,7 +184,7 @@ static bool isSessionWindowActive() {
 
   HTTPClient http;
   http.begin(g_tlsClient, url);
-  http.setTimeout(15000);
+  http.setTimeout(HTTP_TIMEOUT_INDEX_MS);
   // Explicitly request plain text — prevents the CDN returning gzip/deflate
   http.addHeader("Accept-Encoding", "identity");
   http.addHeader("Accept", "application/json");
@@ -346,7 +357,7 @@ static String negotiateToken(String& outCookie) {
   HTTPClient http;
   String url = String("https://") + SIGNALR_NEGOTIATE_HOST + SIGNALR_NEGOTIATE_PATH;
   http.begin(g_tlsClient, url);
-  http.setTimeout(10000);
+  http.setTimeout(HTTP_TIMEOUT_NEGOTIATE_MS);
   // No extra request headers on negotiate — matches the reference (signalr.py),
   // which calls session.get() with no explicit headers.  User-Agent / Accept-Encoding
   // are only set on the WebSocket connect step.
@@ -407,7 +418,7 @@ static void fetchChampStandings() {
   HTTPClient http;
   http.begin(tlsChamp,
              "https://api.jolpi.ca/ergast/f1/current/driverstandings.json?limit=20");
-  http.setTimeout(15000);
+  http.setTimeout(HTTP_TIMEOUT_CHAMP_MS);
   http.addHeader("Accept-Encoding", "identity");
   http.addHeader("Accept", "application/json");
 
@@ -467,7 +478,7 @@ static void fetchEventTracker() {
   tlsET.setInsecure();
   HTTPClient http;
   http.begin(tlsET, "https://api.formula1.com/v1/event-tracker");
-  http.setTimeout(15000);
+  http.setTimeout(HTTP_TIMEOUT_EVENT_MS);
   http.addHeader("apiKey",          "lfjBG5SiokAAND3ucpnE9BcPjO74SpUz");
   http.addHeader("locale",          "en");
   http.addHeader("Accept",          "application/json");
@@ -791,7 +802,7 @@ static void callSignalRStart() {
   g_tlsClient.setInsecure();
   HTTPClient http;
   http.begin(g_tlsClient, url);
-  http.setTimeout(5000);
+  http.setTimeout(HTTP_TIMEOUT_START_MS);
   http.addHeader("User-Agent", "BestHTTP");
   if (g_signalrCookie.length() > 0)
     http.addHeader("Cookie", g_signalrCookie);
@@ -1034,6 +1045,7 @@ void f1LiveLoop() {
       // is never called, the server's TCP send buffer fills with seed data
       // frames, and the server closes the connection.
       g_nextPollMs = now + F1_POLL_INTERVAL_MS;
+      g_nextLiveWindowPollMs = now + LIVE_WINDOW_CHECK_INTERVAL_MS;
     } else {
       // Count HTTP/TLS-level failures the same way WStype_DISCONNECTED counts
       // pre-seed drops — so the g_emptyConnectCount >= 3 escape in RECONNECTING
@@ -1115,9 +1127,10 @@ void f1LiveLoop() {
       Serial.printf("[F1] Heartbeat %s\n", sent ? "sent" : "FAILED");
     }
 
-    // Periodic session window check: if the window closed, disconnect gracefully
-    if (now >= g_nextPollMs) {
-      g_nextPollMs = now + F1_POLL_INTERVAL_MS;
+    // Periodic session window check: if the window closed, disconnect gracefully.
+    // Run less often in LIVE to avoid frequent blocking HTTPS fetches.
+    if (now >= g_nextLiveWindowPollMs) {
+      g_nextLiveWindowPollMs = now + LIVE_WINDOW_CHECK_INTERVAL_MS;
       if (!isSessionWindowActive()) {
         Serial.println("[F1] Session window closed \u2014 disconnecting");
         g_intentionalDisconnect = true;
@@ -1128,6 +1141,7 @@ void f1LiveLoop() {
         g_upcomingCount = 0;  // clear stale schedule immediately
         g_state         = F1State::IDLE;
         g_nextPollMs    = now + F1_POST_WINDOW_MS;  // override: delay re-poll
+        g_nextLiveWindowPollMs = 0;
         g_needScheduleFetch = true;
         g_needChampFetch    = true;
         g_activeSessionIsRace   = false;

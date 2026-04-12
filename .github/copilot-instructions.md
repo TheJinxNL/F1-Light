@@ -32,7 +32,7 @@
 | TFT MOSI/SDA  |  23  |
 | TFT SCLK/SCL  |  14  |
 | TFT CS        |  15  |
-| TFT DC        |   2  |
+| TFT DC        |  27  |
 | TFT RST       |   4  |
 | TFT BL (PWM)  |  13  |
 | WiFi reset btn|   0  |
@@ -67,7 +67,7 @@ Manifest URL and version are in `config.h`. Boot-time OTA check is controlled by
   - BOM handling: peek 3 bytes before streaming; if `0xEF 0xBB 0xBF` discard them, otherwise push them back via a small `PrependStream` wrapper.
   - `Sessions` field can be a JSON **array** OR a JSON **object (dict)**. Always handle both: check `sv.is<JsonArray>()` then `sv.is<JsonObject>()`.
   - Practice sessions have `Name` starting with `"Practice"` — skip them for the display list.
-  - Only store sessions from the **next race weekend** (lock `nextMeeting` on first future session found).
+  - Stores all future non-practice sessions across all meetings up to `MAX_UPCOMING_SESSIONS`.
 - **Event-tracker fallback** (when Index.json has no upcoming sessions): `https://api.formula1.com/v1/event-tracker`
   - Headers required: `apiKey: lfjBG5SiokAAND3ucpnE9BcPjO74SpUz`, `locale: en`
   - Timetables at `seasonContext.timetables` or `event.timetables`; meeting name at `race.meetingOfficialName` / `race.meetingName` / `event.meetingName`
@@ -114,7 +114,7 @@ Manifest URL and version are in `config.h`. Boot-time OTA check is controlled by
 - Alternation is suppressed during the 5-minute countdown (always shows schedule)
 - `f1ChampRefreshed()` always caches the new data; redraws immediately only if currently showing the standings view (`s_idleView == 1`) — otherwise the data is ready for the next view switch
 - Championship standings are fetched once on first IDLE entry then every 30 minutes
-- `g_scheduleRefreshed` is set unconditionally in `fetchEventTracker()` (even when `g_upcomingCount == 0`) so the display redraws after a race ends and no future sessions are listed yet
+- `g_scheduleRefreshed` is set unconditionally at the end of `fetchUpcomingSchedule()` (even when `g_upcomingCount == 0`) so the display redraws after a race ends and no future sessions are listed yet
 
 ## Development Guidelines
 - Suggest Arduino-compatible C++ code only

@@ -11,7 +11,9 @@
                                    // GPIO 0 is the BOOT button on most ESP32 DevKits — no extra wiring needed
 
 // ─── NTP (time sync) ──────────────────────────────────────────────────────────
-#define NTP_SERVER    "pool.ntp.org"
+#define NTP_SERVER1    "nl.pool.ntp.org"
+#define NTP_SERVER2    "time.google.com"
+#define NTP_SERVER3    "time.cloudflare.com"
 #define NTP_GMT_OFFSET_SEC   0      // UTC; adjust if you want local time display
 #define NTP_DAYLIGHT_OFFSET_SEC 0
 

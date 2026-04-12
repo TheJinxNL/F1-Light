@@ -876,11 +876,16 @@ static void fetchEventTracker() {
 static void fetchUpcomingSchedule() {
   const char* source = "index";
   g_upcomingCount = 0;
+
+  Serial.println("[F1] Schedule refresh: start");
   fetchUpcomingFromIndex();
+  Serial.printf("[F1] Schedule refresh: after index count=%u\n", g_upcomingCount);
+
   if (g_upcomingCount == 0) {
     source = "event-tracker";
-    Serial.println("[F1] Index schedule empty; trying event-tracker fallback...");
+    Serial.println("[F1] Index schedule empty");
     fetchEventTracker();
+    Serial.printf("[F1] Schedule refresh: after event-tracker count=%u\n", g_upcomingCount);
   }
   if (g_upcomingCount > 0) {
     const SessionInfo& first = g_upcomingSessions[0];
@@ -1258,7 +1263,7 @@ void f1LiveLoop() {
   if (g_state == F1State::WIFI_CONNECTING) {
     if (WiFi.status() == WL_CONNECTED) {
       Serial.printf("[F1] WiFi OK  IP: %s\n", WiFi.localIP().toString().c_str());
-      configTime(NTP_GMT_OFFSET_SEC, NTP_DAYLIGHT_OFFSET_SEC, NTP_SERVER);
+      configTime(NTP_GMT_OFFSET_SEC, NTP_DAYLIGHT_OFFSET_SEC, NTP_SERVER1, NTP_SERVER2, NTP_SERVER3);
       g_state = F1State::NTP_SYNC;
     } else if (now >= g_wifiRetryMs) {
       // Network not found or portal previously timed out — re-open the
@@ -1281,7 +1286,7 @@ void f1LiveLoop() {
       Serial.println("[F1] WiFiManager: (re)trying...");
       if (wm.autoConnect(WIFI_MANAGER_AP_NAME)) {
         Serial.printf("[F1] WiFi OK  IP: %s\n", WiFi.localIP().toString().c_str());
-        configTime(NTP_GMT_OFFSET_SEC, NTP_DAYLIGHT_OFFSET_SEC, NTP_SERVER);
+        configTime(NTP_GMT_OFFSET_SEC, NTP_DAYLIGHT_OFFSET_SEC, NTP_SERVER1, NTP_SERVER2, NTP_SERVER3);
         g_state = F1State::NTP_SYNC;
       } else {
         // Portal timed out again — short pause then retry so we don't hammer.
@@ -1476,7 +1481,7 @@ void f1LiveLoop() {
     return;
   }
 
-  // \u2500\u2500 5b. SESSION_ENDED: main loop plays the animation, then we move to IDLE \u2500\u2500\u2500\u2500\u2500
+  //  5b. SESSION_ENDED: main loop plays the animation, then we move to IDLE 
   // The actual effect (effectSessionFinished) and display (displayShowFinished) are
   // called from F1_Light.ino on the stateChanged transition.  f1_live.cpp simply
   // moves to IDLE on the very next iteration so the main loop has one pass to draw.

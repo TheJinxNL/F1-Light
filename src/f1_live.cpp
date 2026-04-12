@@ -80,6 +80,10 @@ static const uint16_t HTTP_TIMEOUT_NEGOTIATE_MS = 6000;
 static const uint16_t HTTP_TIMEOUT_CHAMP_MS     = 7000;
 static const uint16_t HTTP_TIMEOUT_EVENT_MS     = 7000;
 static const uint16_t HTTP_TIMEOUT_START_MS     = 4000;
+// Earliest plausible UTC epoch for valid NTP sync (Nov 2023).
+static const time_t   MIN_VALID_UTC_EPOCH       = (time_t)1700000000;
+static const int      MIN_VALID_UTC_YEAR        = 2023;
+static const int      MAX_VALID_UTC_YEAR        = 2100;
 
 // Session-window checks in LIVE require an HTTPS fetch; run less often than IDLE polls.
 static const uint32_t LIVE_WINDOW_CHECK_INTERVAL_MS = 5UL * 60UL * 1000UL;
@@ -354,10 +358,24 @@ static bool isSessionWindowActive() {
   char url[80];
   struct tm t = {};
   time_t now = utcNow();
-  gmtime_r(&now, &t);
+  
+  // Sanity check: if time hasn't been synced yet, don't attempt the request
+  // (year would be invalid, causing 403).
+  if (now < MIN_VALID_UTC_EPOCH) {
+    return false;
+  }
+
+  if (!gmtime_r(&now, &t)) {
+    return false;
+  }
+  int year = t.tm_year + 1900;
+  if (year < MIN_VALID_UTC_YEAR || year > MAX_VALID_UTC_YEAR) {
+    return false;
+  }
+
   snprintf(url, sizeof(url),
            "https://livetiming.formula1.com/static/%04d/Index.json",
-           t.tm_year + 1900);
+           year);
 
   Serial.printf("[F1] Polling: %s\n", url);
 
@@ -368,6 +386,7 @@ static bool isSessionWindowActive() {
   http.addHeader("Accept-Encoding", "identity");
   http.addHeader("Accept", "application/json");
   http.addHeader("User-Agent", "BestHTTP");
+  http.addHeader("Referer", "https://livetiming.formula1.com/");
 
   int code = http.GET();
   if (code != 200) {
@@ -644,10 +663,108 @@ static void fetchChampStandings() {
   Serial.printf("[F1] Standings loaded: %u drivers\n", g_champCount);
   g_champRefreshed = true;
 }
+
+/**
+ * Primary schedule source: livetiming Index.json for current year.
+ * Populates g_upcomingSessions with future non-practice sessions.
+ */
+static void fetchUpcomingFromIndex() {
+  char url[80];
+  struct tm t = {};
+  time_t now = utcNow();
+
+  if (now < MIN_VALID_UTC_EPOCH) return;
+  if (!gmtime_r(&now, &t)) return;
+  int year = t.tm_year + 1900;
+  if (year < MIN_VALID_UTC_YEAR || year > MAX_VALID_UTC_YEAR) return;
+
+  snprintf(url, sizeof(url),
+           "https://livetiming.formula1.com/static/%04d/Index.json",
+           year);
+
+  Serial.printf("[F1] Fetching schedule from Index.json: %s\n", url);
+
+  HTTPClient http;
+  http.begin(g_tlsClient, url);
+  http.setTimeout(HTTP_TIMEOUT_INDEX_MS);
+  http.addHeader("Accept-Encoding", "identity");
+  http.addHeader("Accept", "application/json");
+  http.addHeader("User-Agent", "BestHTTP");
+  http.addHeader("Referer", "https://livetiming.formula1.com/");
+
+  int code = http.GET();
+  if (code != 200) {
+    Serial.printf("[F1] Index schedule HTTP %d\n", code);
+    http.end();
+    return;
+  }
+
+  JsonDocument filter;
+  filter["Meetings"][0]["Name"]                     = true;
+  filter["Meetings"][0]["Sessions"][0]["Name"]      = true;
+  filter["Meetings"][0]["Sessions"][0]["StartDate"] = true;
+  filter["Meetings"][0]["Sessions"][0]["EndDate"]   = true;
+  filter["Meetings"][0]["Sessions"][0]["GmtOffset"] = true;
+
+  JsonDocument doc;
+  DeserializationError err = deserializeJson(
+      doc, http.getStream(), DeserializationOption::Filter(filter));
+  http.end();
+
+  if (err) {
+    Serial.printf("[F1] Index schedule JSON error: %s\n", err.c_str());
+    return;
+  }
+
+  JsonArray meetings = doc["Meetings"].as<JsonArray>();
+  for (JsonObject meeting : meetings) {
+    const char* meetingName = meeting["Name"] | "F1 Grand Prix";
+    JsonVariant sv = meeting["Sessions"];
+
+    auto addSession = [&](JsonObject session) {
+      const char* sName = session["Name"] | "Session";
+      if (strncasecmp(sName, "Practice", 8) == 0 ||
+          strncasecmp(sName, "Free", 4) == 0) {
+        return;
+      }
+
+      const char* startStr  = session["StartDate"];
+      const char* endStr    = session["EndDate"];
+      const char* gmtOffset = session["GmtOffset"];
+
+      time_t sessionStart = parseIso8601(startStr, gmtOffset);
+      time_t sessionEnd   = parseIso8601(endStr, gmtOffset);
+      if (sessionStart == 0) return;
+      if (sessionEnd <= sessionStart) sessionEnd = sessionStart + 7200;
+      if (sessionEnd <= now) return;
+      if (g_upcomingCount >= MAX_UPCOMING_SESSIONS) return;
+
+      SessionInfo& si = g_upcomingSessions[g_upcomingCount++];
+      strncpy(si.meetingName, meetingName, sizeof(si.meetingName) - 1);
+      si.meetingName[sizeof(si.meetingName) - 1] = '\0';
+      strncpy(si.sessionName, sName, sizeof(si.sessionName) - 1);
+      si.sessionName[sizeof(si.sessionName) - 1] = '\0';
+      si.startUtc = sessionStart;
+    };
+
+    if (sv.is<JsonArray>()) {
+      for (JsonObject s : sv.as<JsonArray>()) addSession(s);
+    } else if (sv.is<JsonObject>()) {
+      for (JsonPair kv : sv.as<JsonObject>()) {
+        if (kv.value().is<JsonObject>()) addSession(kv.value().as<JsonObject>());
+      }
+    }
+
+    if (g_upcomingCount >= MAX_UPCOMING_SESSIONS) break;
+  }
+
+  Serial.printf("[F1] Index schedule: %u session(s) stored\n", g_upcomingCount);
+  g_tlsClient.stop();
+}
+
 /**
  * Fallback schedule source: api.formula1.com/v1/event-tracker.
- * Called when Index.json yields 0 upcoming sessions (e.g. early in the season
- * before F1 has published future rounds to the static Index.json).
+ * Called when Index.json yields 0 upcoming sessions.
  * Populates g_upcomingSessions with the sessions of the current/next event.
  */
 static void fetchEventTracker() {
@@ -753,7 +870,127 @@ static void fetchEventTracker() {
   }
 
   Serial.printf("[F1] Event-tracker: %u session(s) stored\n", g_upcomingCount);
-  g_scheduleRefreshed = true;  // always redraw — covers the "0 sessions" (race just finished) case too
+}
+
+/**
+ * Last-resort schedule fallback: Jolpica (Ergast-compatible) race calendar.
+ * Populates future Qualifying/Sprint/Race sessions.
+ */
+static void fetchErgastRaceCalendar() {
+  Serial.println("[F1] Trying Ergast calendar fallback...");
+
+  WiFiClientSecure tlsCal;
+  tlsCal.setInsecure();
+  HTTPClient http;
+  http.begin(tlsCal, "https://api.jolpi.ca/ergast/f1/current.json");
+  http.setTimeout(HTTP_TIMEOUT_EVENT_MS);
+  http.addHeader("Accept-Encoding", "identity");
+  http.addHeader("Accept", "application/json");
+
+  int code = http.GET();
+  if (code != 200) {
+    Serial.printf("[F1] Ergast calendar HTTP %d\n", code);
+    http.end();
+    return;
+  }
+
+  JsonDocument filter;
+  filter["MRData"]["RaceTable"]["Races"][0]["raceName"]                 = true;
+  filter["MRData"]["RaceTable"]["Races"][0]["date"]                     = true;
+  filter["MRData"]["RaceTable"]["Races"][0]["time"]                     = true;
+  filter["MRData"]["RaceTable"]["Races"][0]["Qualifying"]["date"]      = true;
+  filter["MRData"]["RaceTable"]["Races"][0]["Qualifying"]["time"]      = true;
+  filter["MRData"]["RaceTable"]["Races"][0]["Sprint"]["date"]          = true;
+  filter["MRData"]["RaceTable"]["Races"][0]["Sprint"]["time"]          = true;
+
+  JsonDocument doc;
+  DeserializationError err = deserializeJson(
+      doc, http.getStream(), DeserializationOption::Filter(filter));
+  http.end();
+
+  if (err) {
+    Serial.printf("[F1] Ergast calendar JSON error: %s\n", err.c_str());
+    return;
+  }
+
+  JsonArray races = doc["MRData"]["RaceTable"]["Races"].as<JsonArray>();
+  time_t now = utcNow();
+
+  for (JsonObject race : races) {
+    const char* raceName = race["raceName"] | "Grand Prix";
+
+    auto addSession = [&](const char* label, JsonVariant obj, bool fallbackToRaceRoot = false) {
+      if (g_upcomingCount >= MAX_UPCOMING_SESSIONS) return;
+
+      const char* dateStr = nullptr;
+      const char* timeStr = nullptr;
+
+      if (!obj.isNull()) {
+        dateStr = obj["date"];
+        timeStr = obj["time"];
+      }
+      if (fallbackToRaceRoot) {
+        dateStr = race["date"];
+        timeStr = race["time"];
+      }
+
+      if (!dateStr || strlen(dateStr) < 10) return;
+
+      char iso[40];
+      if (timeStr && strlen(timeStr) >= 8) {
+        snprintf(iso, sizeof(iso), "%sT%.8sZ", dateStr, timeStr);
+      } else {
+        // If API omits time, default to 14:00 UTC.
+        snprintf(iso, sizeof(iso), "%sT14:00:00Z", dateStr);
+      }
+
+      time_t start = parseIso8601(iso, nullptr);
+      if (start == 0 || start <= now) return;
+
+      SessionInfo& si = g_upcomingSessions[g_upcomingCount++];
+      strncpy(si.meetingName, raceName, sizeof(si.meetingName) - 1);
+      si.meetingName[sizeof(si.meetingName) - 1] = '\0';
+      strncpy(si.sessionName, label, sizeof(si.sessionName) - 1);
+      si.sessionName[sizeof(si.sessionName) - 1] = '\0';
+      si.startUtc = start;
+    };
+
+    addSession("Qualifying", race["Qualifying"]);
+    addSession("Sprint", race["Sprint"]);
+    addSession("Race", JsonVariant(), true);
+
+    if (g_upcomingCount >= MAX_UPCOMING_SESSIONS) break;
+  }
+
+  Serial.printf("[F1] Ergast calendar: %u session(s) stored\n", g_upcomingCount);
+}
+
+/** Refresh upcoming schedule using Index.json first, then event-tracker fallback. */
+static void fetchUpcomingSchedule() {
+  const char* source = "index";
+  g_upcomingCount = 0;
+  fetchUpcomingFromIndex();
+  if (g_upcomingCount == 0) {
+    source = "event-tracker";
+    Serial.println("[F1] Index schedule empty; trying event-tracker fallback...");
+    fetchEventTracker();
+  }
+  if (g_upcomingCount == 0) {
+    source = "ergast";
+    Serial.println("[F1] Event-tracker empty; trying Ergast calendar fallback...");
+    fetchErgastRaceCalendar();
+  }
+  if (g_upcomingCount > 0) {
+    const SessionInfo& first = g_upcomingSessions[0];
+    Serial.printf("[F1] Next session (%s): %s / %s @ %ld\n",
+                  source,
+                  first.meetingName,
+                  first.sessionName,
+                  (long)first.startUtc);
+  } else {
+    Serial.println("[F1] Next session: none");
+  }
+  g_scheduleRefreshed = true;
 }
 
 // ─── WebSocket event handler ──────────────────────────────────────────────────
@@ -1156,11 +1393,17 @@ void f1LiveLoop() {
   // ── 2. NTP sync ─────────────────────────────────────────────────────────────
   if (g_state == F1State::NTP_SYNC) {
     time_t epoch = utcNow();
-    if (epoch > 1700000000UL) {  // sanity: after Nov 2023
+    if (epoch >= MIN_VALID_UTC_EPOCH) {
       struct tm t = {};
-      gmtime_r(&epoch, &t);
+      if (!gmtime_r(&epoch, &t)) {
+        return;
+      }
+      int year = t.tm_year + 1900;
+      if (year < MIN_VALID_UTC_YEAR || year > MAX_VALID_UTC_YEAR) {
+        return;
+      }
       Serial.printf("[F1] NTP synced: %04d-%02d-%02dT%02d:%02d:%02dZ\n",
-                    t.tm_year + 1900, t.tm_mon + 1, t.tm_mday,
+                    year, t.tm_mon + 1, t.tm_mday,
                     t.tm_hour, t.tm_min, t.tm_sec);
       otaCheckAtBoot();
       g_state      = F1State::IDLE;
@@ -1198,7 +1441,7 @@ void f1LiveLoop() {
     }
     if (g_needScheduleFetch) {
       g_needScheduleFetch = false;
-      fetchEventTracker();
+      fetchUpcomingSchedule();
       return;
     }
     if (now >= g_nextPollMs) {

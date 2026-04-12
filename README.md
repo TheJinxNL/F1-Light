@@ -18,6 +18,7 @@ Inspiration on how to access the F1 Live Feeds: https://github.com/Nicxe/f1_sens
 - **Session-end celebration** — chequered flag LED sweep + 3× white flash + fade + "FINISHED" screen when a session ends
 - **Reconnect resilience** — display and LEDs hold the last known track status during a SignalR reconnect
 - **Upcoming screen** — next race name, up to 3 sessions with local times; alternates every 10 s with the standings screen
+- **Resilient schedule sources** — upcoming sessions are fetched from Index.json, then event-tracker, then Ergast calendar (Qualifying/Sprint/Race)
 - **Championship standings screen** — top 6 drivers with position badge, code, and points; fetched from the Ergast mirror
 - **5-minute countdown** before each session
 - **WiFiManager** — configure WiFi from your phone on first boot; credentials saved to flash
@@ -261,9 +262,17 @@ This project uses the **unofficial but public** F1 Live Timing endpoints:
 
 - **Schedule:** `https://livetiming.formula1.com/static/{year}/Index.json`
 - **Event tracker fallback:** `https://api.formula1.com/v1/event-tracker`
+- **Calendar fallback (Qualifying/Sprint/Race):** `https://api.jolpi.ca/ergast/f1/current.json`
 - **SignalR negotiate:** `https://livetiming.formula1.com/signalr/negotiate`
 - **WebSocket:** `wss://livetiming.formula1.com/signalr/connect`
 - **Championship standings:** `https://api.jolpi.ca/ergast/f1/current/driverstandings.json`
+
+Schedule fallback order used by firmware:
+1. `Index.json` (primary)
+2. `event-tracker` (secondary)
+3. `ergast current calendar` (last resort, includes Qualifying/Sprint/Race)
+
+Note: F1 sometimes changes what `Index.json` or `event-tracker` include during the season. The multi-source fallback chain keeps the Upcoming screen populated even when one source temporarily returns no future sessions.
 
 Track status codes received over the feed:
 

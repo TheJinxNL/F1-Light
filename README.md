@@ -63,7 +63,7 @@ Inspiration on how to access the F1 Live Feeds: https://github.com/Nicxe/f1_sens
 | 3.3 V   | VCC         | |
 | GND     | GND         | |
 
-> All pin numbers can be changed in [config.h](config.h).  
+> All pin numbers can be changed in [src/config.h](src/config.h).  
 > **Avoid GPIO 2** — can interfere with boot/flash on some boards.  
 > **Avoid GPIO 6–11** — connected to internal SPI flash.
 
@@ -76,26 +76,25 @@ Hold **GPIO 0** (the built-in BOOT button on most DevKits) while powering on to 
 
 ```
 F1_Light/
-├── F1_Light.ino                        — Main sketch: setup(), loop(), state/display wiring
-├── config.h                            — All hardware pins, timing, and colour constants
-├── f1_live.h                           — Public API + shared types (TrackStatus, F1State, SessionInfo, ChampEntry)
-├── f1_live.cpp                         — WiFi, NTP, Index.json polling, SignalR WebSocket FSM
-├── effects.h                           — LED effect declarations
-├── effects.cpp                         — LED effect implementations (non-blocking, millis-based)
-├── display.h                           — TFT display declarations
-├── display.cpp                         — ST7789 display driver (Adafruit GFX)
-├── web_ui.h                            — Web settings server declarations
-├── web_ui.cpp                          — HTTP settings server on port 80 (brightness, idle style, test mode)
-├── f1logo.h / f1logo.cpp               — F1 logo bitmap (RGB565)
-├── Formula1_Display_Regular11pt7b.h    — Custom F1 font (large — session names, lap info)
-└── Formula1_Display_Regular7pt7b.h     — Custom F1 font (small — labels, times, standings)
+├── src/
+│   ├── main.cpp                        — Main application entry point: setup(), loop(), state/display wiring
+│   ├── config.h                        — All hardware pins, timing, and colour constants
+│   ├── f1_live.h / f1_live.cpp         — Live timing client, schedule fetch, SignalR handling
+│   ├── effects.h / effects.cpp         — LED effect declarations and implementations
+│   ├── display.h / display.cpp         — ST7789 display declarations and driver
+│   ├── web_ui.h / web_ui.cpp           — HTTP settings server and persistent settings
+│   ├── f1logo.h / f1logo.cpp           — F1 logo bitmap (RGB565)
+│   ├── Formula1_Display_Regular11pt7b.h
+│   └── Formula1_Display_Regular7pt7b.h
+├── platformio.ini
+└── partitions_no_fs.csv
 ```
 
 ---
 
 ## Required Libraries
 
-Install all via **Arduino Library Manager** (Sketch → Include Library → Manage Libraries):
+Managed by PlatformIO via [platformio.ini](platformio.ini) `lib_deps`:
 
 | Library | Author |
 |---------|--------|
@@ -106,28 +105,36 @@ Install all via **Arduino Library Manager** (Sketch → Include Library → Mana
 | Adafruit ST7735 and ST7789 Library | Adafruit |
 | Adafruit GFX Library | Adafruit |
 
+If you use PlatformIO, no manual library installation is needed.
+
 ---
 
 ## Getting Started
 
-### 1. Install Arduino IDE and ESP32 core
-In **File → Preferences → Additional Boards Manager URLs** add:
-```
-https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
-```
-Then install **esp32** via **Tools → Board → Boards Manager**. Tested on core **3.3.7**.
+### 1. Install PlatformIO
+Use either:
+- VS Code + PlatformIO IDE extension
+- PlatformIO Core CLI (`pio` / `platformio`)
 
-### 2. Install libraries
-See the table above.
-
-### 3. Configure [config.h](config.h)
+### 2. Configure [src/config.h](src/config.h)
 Adjust GPIO pins if your wiring differs. Set `DISPLAY_TZ_POSIX` to your local timezone string. Everything else (WiFi credentials) is configured at runtime.
 
+### 3. Build
+From the project root:
+
+```bash
+platformio run --environment esp32dev
+```
+
 ### 4. Upload
-Select board **ESP32 Dev Module**, choose your COM port, click **Upload**.
+From the project root:
+
+```bash
+platformio run --target upload --environment esp32dev
+```
 
 > For OTA support, use a partition scheme with two app slots, e.g.
-> **No FS 4MB (2MB App/OTA)** in Arduino IDE.
+> **No FS 4MB (2MB App/OTA)** via [partitions_no_fs.csv](partitions_no_fs.csv).
 
 ### 5. First-boot WiFi setup
 On first boot the display shows a blue **SETUP** screen. Connect your phone/laptop to the Wi-Fi network named **`F1-Light-Setup`**, open a browser, go to **`192.168.4.1`**, and pick your home network. Credentials are saved permanently.
@@ -137,6 +144,12 @@ After connecting to WiFi, the display briefly shows the web settings URL (e.g. `
 
 ### 7. Monitor
 Open **Serial Monitor** at **115200 baud** to see connection progress, parsed sessions and track status updates.
+
+With PlatformIO CLI:
+
+```bash
+platformio device monitor --baud 115200
+```
 
 ---
 
@@ -178,7 +191,7 @@ Open **Serial Monitor** at **115200 baud** to see connection progress, parsed se
 
 ## Configuration Reference
 
-All constants live in [config.h](config.h):
+All constants live in [src/config.h](src/config.h):
 
 | Constant | Default | Description |
 | ---------|---------|-------------|
@@ -238,7 +251,7 @@ Expected JSON:
 Notes:
 - `firmwareUrl` (or `url`) is required.
 - `md5` is optional but recommended.
-- Upload the sketch app binary (`F1_Light.ino.bin`), not bootloader/partitions binaries.
+- Upload the app binary (`firmware.bin` in PlatformIO), not bootloader/partitions binaries.
 
 ---
 

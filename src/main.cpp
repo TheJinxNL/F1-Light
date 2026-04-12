@@ -1,5 +1,5 @@
 /**
- * F1_Light.ino
+ * main.cpp
  * ─────────────────────────────────────────────────────────────────────────────
  * ESP32-based F1-style LED light bar + TFT display controller.
  * Connects to the F1 live-timing SignalR feed and shows track status on

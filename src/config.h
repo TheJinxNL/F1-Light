@@ -39,6 +39,10 @@
 // ─── F1 Live feed polling ─────────────────────────────────────────────────────
 // How often (ms) to poll Index.json to check whether a session window is active
 #define F1_POLL_INTERVAL_MS  60000UL  // 1 minute
+// If no upcoming sessions are available, retry full schedule refresh at this interval.
+#define F1_EMPTY_SCHEDULE_RETRY_MS (30UL * 60UL * 1000UL)  // 30 minutes
+// How often (ms) to refresh championship standings while IDLE.
+#define F1_CHAMP_REFRESH_MS (60UL * 60UL * 1000UL)  // 60 minutes
 
 // ─── OTA update checks ───────────────────────────────────────────────────────
 // Firmware version used for boot-time update checks.

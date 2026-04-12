@@ -114,6 +114,8 @@ static uint32_t g_connectedAtMs         = 0;      // millis() when WStype_CONNEC
 static uint32_t g_lastStreamActivityMs  = 0;      // millis() of last WStype_TEXT frame received
 static uint32_t g_nextPollMs            = 0;      // absolute ms for next IDLE/LIVE poll
 static uint32_t g_nextLiveWindowPollMs  = 0;      // absolute ms for next LIVE window check
+static uint32_t g_nextEmptyScheduleRetryMs = 0;   // absolute ms for next empty-schedule refresh
+static uint32_t g_nextChampFetchMs      = 0;      // absolute ms for next periodic standings refresh
 static bool     g_intentionalDisconnect = false;  // set before deliberate g_ws.disconnect()
 static time_t   g_windowEndUtc          = 0;      // UTC epoch when active session window expires
 static uint8_t  g_emptyConnectCount     = 0;      // consecutive connects with no seed data received
@@ -894,8 +896,12 @@ static void fetchUpcomingSchedule() {
                   first.meetingName,
                   first.sessionName,
                   (long)first.startUtc);
+    g_nextEmptyScheduleRetryMs = 0;
   } else {
     Serial.println("[F1] Next session: none");
+    g_nextEmptyScheduleRetryMs = millis() + F1_EMPTY_SCHEDULE_RETRY_MS;
+    Serial.printf("[F1] Next empty-schedule refresh in %lu min\n",
+                  (unsigned long)(F1_EMPTY_SCHEDULE_RETRY_MS / 60000UL));
   }
   g_scheduleRefreshed = true;
 }
@@ -1344,11 +1350,25 @@ void f1LiveLoop() {
     if (g_needChampFetch) {
       g_needChampFetch = false;
       fetchChampStandings();
+      g_nextChampFetchMs = millis() + F1_CHAMP_REFRESH_MS;
+      return;
+    }
+    if (g_nextChampFetchMs > 0 && now >= g_nextChampFetchMs) {
+      Serial.println("[F1] Championship refresh due");
+      g_needChampFetch = true;
       return;
     }
     if (g_needScheduleFetch) {
       g_needScheduleFetch = false;
       fetchUpcomingSchedule();
+      return;
+    }
+    // If schedule is empty, refresh only on a slower cadence to reduce API traffic.
+    if (g_upcomingCount == 0 &&
+        g_nextEmptyScheduleRetryMs > 0 &&
+        now >= g_nextEmptyScheduleRetryMs) {
+      Serial.println("[F1] Empty schedule retry due — refreshing schedule");
+      g_needScheduleFetch = true;
       return;
     }
     if (now >= g_nextPollMs) {

@@ -872,99 +872,6 @@ static void fetchEventTracker() {
   Serial.printf("[F1] Event-tracker: %u session(s) stored\n", g_upcomingCount);
 }
 
-/**
- * Last-resort schedule fallback: Jolpica (Ergast-compatible) race calendar.
- * Populates future Qualifying/Sprint/Race sessions.
- */
-static void fetchErgastRaceCalendar() {
-  Serial.println("[F1] Trying Ergast calendar fallback...");
-
-  WiFiClientSecure tlsCal;
-  tlsCal.setInsecure();
-  HTTPClient http;
-  http.begin(tlsCal, "https://api.jolpi.ca/ergast/f1/current.json");
-  http.setTimeout(HTTP_TIMEOUT_EVENT_MS);
-  http.addHeader("Accept-Encoding", "identity");
-  http.addHeader("Accept", "application/json");
-
-  int code = http.GET();
-  if (code != 200) {
-    Serial.printf("[F1] Ergast calendar HTTP %d\n", code);
-    http.end();
-    return;
-  }
-
-  JsonDocument filter;
-  filter["MRData"]["RaceTable"]["Races"][0]["raceName"]                 = true;
-  filter["MRData"]["RaceTable"]["Races"][0]["date"]                     = true;
-  filter["MRData"]["RaceTable"]["Races"][0]["time"]                     = true;
-  filter["MRData"]["RaceTable"]["Races"][0]["Qualifying"]["date"]      = true;
-  filter["MRData"]["RaceTable"]["Races"][0]["Qualifying"]["time"]      = true;
-  filter["MRData"]["RaceTable"]["Races"][0]["Sprint"]["date"]          = true;
-  filter["MRData"]["RaceTable"]["Races"][0]["Sprint"]["time"]          = true;
-
-  JsonDocument doc;
-  DeserializationError err = deserializeJson(
-      doc, http.getStream(), DeserializationOption::Filter(filter));
-  http.end();
-
-  if (err) {
-    Serial.printf("[F1] Ergast calendar JSON error: %s\n", err.c_str());
-    return;
-  }
-
-  JsonArray races = doc["MRData"]["RaceTable"]["Races"].as<JsonArray>();
-  time_t now = utcNow();
-
-  for (JsonObject race : races) {
-    const char* raceName = race["raceName"] | "Grand Prix";
-
-    auto addSession = [&](const char* label, JsonVariant obj, bool fallbackToRaceRoot = false) {
-      if (g_upcomingCount >= MAX_UPCOMING_SESSIONS) return;
-
-      const char* dateStr = nullptr;
-      const char* timeStr = nullptr;
-
-      if (!obj.isNull()) {
-        dateStr = obj["date"];
-        timeStr = obj["time"];
-      }
-      if (fallbackToRaceRoot) {
-        dateStr = race["date"];
-        timeStr = race["time"];
-      }
-
-      if (!dateStr || strlen(dateStr) < 10) return;
-
-      char iso[40];
-      if (timeStr && strlen(timeStr) >= 8) {
-        snprintf(iso, sizeof(iso), "%sT%.8sZ", dateStr, timeStr);
-      } else {
-        // If API omits time, default to 14:00 UTC.
-        snprintf(iso, sizeof(iso), "%sT14:00:00Z", dateStr);
-      }
-
-      time_t start = parseIso8601(iso, nullptr);
-      if (start == 0 || start <= now) return;
-
-      SessionInfo& si = g_upcomingSessions[g_upcomingCount++];
-      strncpy(si.meetingName, raceName, sizeof(si.meetingName) - 1);
-      si.meetingName[sizeof(si.meetingName) - 1] = '\0';
-      strncpy(si.sessionName, label, sizeof(si.sessionName) - 1);
-      si.sessionName[sizeof(si.sessionName) - 1] = '\0';
-      si.startUtc = start;
-    };
-
-    addSession("Qualifying", race["Qualifying"]);
-    addSession("Sprint", race["Sprint"]);
-    addSession("Race", JsonVariant(), true);
-
-    if (g_upcomingCount >= MAX_UPCOMING_SESSIONS) break;
-  }
-
-  Serial.printf("[F1] Ergast calendar: %u session(s) stored\n", g_upcomingCount);
-}
-
 /** Refresh upcoming schedule using Index.json first, then event-tracker fallback. */
 static void fetchUpcomingSchedule() {
   const char* source = "index";
@@ -974,11 +881,6 @@ static void fetchUpcomingSchedule() {
     source = "event-tracker";
     Serial.println("[F1] Index schedule empty; trying event-tracker fallback...");
     fetchEventTracker();
-  }
-  if (g_upcomingCount == 0) {
-    source = "ergast";
-    Serial.println("[F1] Event-tracker empty; trying Ergast calendar fallback...");
-    fetchErgastRaceCalendar();
   }
   if (g_upcomingCount > 0) {
     const SessionInfo& first = g_upcomingSessions[0];

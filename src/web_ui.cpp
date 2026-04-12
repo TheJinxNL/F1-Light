@@ -72,7 +72,7 @@ static const char kHtmlPage[] PROGMEM = R"HTML(
       <button id='save'>Apply</button>
       <button id='reboot' type='button'>Reboot Device</button>
     </div>
-    <small>Changes apply immediately and are persisted.</small>
+    <small>Changes apply immediately and are persisted.<br>F1 Light © 2026 Jinx.nl</small>
   </div>
 
   <script>

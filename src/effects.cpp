@@ -94,9 +94,15 @@ void effectIdle() {
     if (idleBars > 4) idleBars = 4;
     uint8_t base = NUM_LEDS - 4;
     for (uint8_t i = 0; i < 4; i++) leds[base + i] = CRGB::Black;
-    for (uint8_t i = 0; i < idleBars; i++) {
-      uint8_t red = (i == (uint8_t)(idleBars - 1)) ? g_idlePulse : IDLE_BASE_RED;
-      leds[base + i] = CRGB(red, 0, 0);
+    if (webUiGetRaceBatteryEnabled()) {
+      // Animated: configured number of bars, top bar pulses.
+      for (uint8_t i = 0; i < idleBars; i++) {
+        uint8_t red = (i == (uint8_t)(idleBars - 1)) ? g_idlePulse : IDLE_BASE_RED;
+        leds[base + i] = CRGB(red, 0, 0);
+      }
+    } else {
+      // Animation off: static full battery (4 solid bars, no pulse).
+      for (uint8_t i = 0; i < 4; i++) leds[base + i] = CRGB(IDLE_BASE_RED, 0, 0);
     }
   } else if (NUM_LEDS > 0) {
     leds[NUM_LEDS - 1] = CRGB(g_idlePulse, 0, 0);
@@ -127,7 +133,7 @@ void effectConnectingSignalR() {
   commitLeds();
 }
 
-void effectRaceBatteryOverlay(bool raceSession, time_t raceStartUtc) {
+void effectRaceBatteryOverlay(bool raceSession, time_t raceStartUtc, bool animated) {
   static uint8_t  pulse    = 170;
   static int8_t   pulseDir = 6;
   static uint32_t lastPulseMs = 0;
@@ -136,6 +142,18 @@ void effectRaceBatteryOverlay(bool raceSession, time_t raceStartUtc) {
     pulse = 170;
     pulseDir = 6;
     lastPulseMs = 0;
+    return;
+  }
+
+  const uint8_t base = NUM_LEDS - 4;
+
+  if (!animated) {
+    // Animation disabled — show a static full battery (4 solid bars).
+    pulse = 170;
+    pulseDir = 6;
+    lastPulseMs = 0;
+    for (uint8_t i = 0; i < 4; i++) leds[base + i] = CRGB(200, 0, 0);
+    commitLeds();
     return;
   }
 
@@ -165,7 +183,6 @@ void effectRaceBatteryOverlay(bool raceSession, time_t raceStartUtc) {
     else barsLit = 4;
   }
 
-  const uint8_t base = NUM_LEDS - 4;
   for (uint8_t i = 0; i < 4; i++) leds[base + i] = CRGB::Black;
 
   for (uint8_t i = 0; i < barsLit; i++) {

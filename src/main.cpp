@@ -99,19 +99,10 @@ void loop() {
       case F1State::RECONNECTING:
         if (status != TrackStatus::UNKNOWN) {
           effectTrackStatus(status);
-          effectRaceBatteryOverlay(f1IsRaceSessionActive(), f1GetActiveSessionStartUtc());
+          effectRaceBatteryOverlay(f1IsRaceSessionActive(), f1GetActiveSessionStartUtc(),
+                                   webUiGetRaceBatteryEnabled());
         } else
           effectConnectingSignalR();
-        break;
-
-      case F1State::LIVE:
-        effectTrackStatus(status);
-        effectRaceBatteryOverlay(f1IsRaceSessionActive(), f1GetActiveSessionStartUtc());
-        break;
-
-      case F1State::WIFI_CONNECTING:
-      case F1State::NTP_SYNC:
-        effectConnecting();
         break;
 
       case F1State::SESSION_ENDED:
@@ -274,15 +265,17 @@ void loop() {
       // blue breathing animation on the very first connect (no status yet).
       if (status != TrackStatus::UNKNOWN) {
         effectTrackStatus(status);
-        effectRaceBatteryOverlay(f1IsRaceSessionActive(), f1GetActiveSessionStartUtc());
+        effectRaceBatteryOverlay(f1IsRaceSessionActive(), f1GetActiveSessionStartUtc(),
+                                 webUiGetRaceBatteryEnabled());
       } else
         effectConnectingSignalR();
       break;
 
-    // ── LIVE ─────────────────────────────────────────────────────────────────
+    // ── LIVE ───────────────────────────────────────────────────────────────
     case F1State::LIVE: {
       effectTrackStatus(status);
-      effectRaceBatteryOverlay(f1IsRaceSessionActive(), f1GetActiveSessionStartUtc());
+      effectRaceBatteryOverlay(f1IsRaceSessionActive(), f1GetActiveSessionStartUtc(),
+                               webUiGetRaceBatteryEnabled());
 
       // Only redraw when track status changes
       bool statusChanged = (status != s_prevStatus);

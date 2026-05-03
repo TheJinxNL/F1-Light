@@ -47,10 +47,12 @@ void effectIdleReset();
 void effectConnectingSignalR();
 
 /**
- * Overlay a 4-bar time-drain battery on the last 4 LEDs during race sessions.
- * Pass raceSession=true and the UTC race start time to activate.
+ * Overlay a 4-bar battery on the last 4 LEDs during race sessions.
+ * animated=true: bars drain over race duration (time-based).
+ * animated=false: static full battery (4 bars, no pulse).
+ * Pass raceSession=false to suppress the overlay entirely.
  */
-void effectRaceBatteryOverlay(bool raceSession, time_t raceStartUtc);
+void effectRaceBatteryOverlay(bool raceSession, time_t raceStartUtc, bool animated = true);
 
 // ─── Live track status effects ────────────────────────────────────────────────
 

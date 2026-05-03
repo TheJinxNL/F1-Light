@@ -25,7 +25,7 @@ Inspiration on how to access the F1 Live Feeds: https://github.com/Nicxe/f1_sens
 - **WiFi reset button** — hold GPIO 0 (BOOT button) at power-on to wipe credentials and re-configure
 - **Dimmable backlight** — reduced brightness at idle, full brightness during a live session
 - **Auto-reconnect** with exponential back-off on SignalR disconnect
-- **Web settings UI** — browser-accessible settings page (LED brightness, idle battery level, test mode, reboot) with persistent NVS storage; URL shown on display at boot
+- **Web settings UI** — browser-accessible settings page (LED brightness, idle battery level, race battery animation toggle, test mode, reboot) with persistent NVS storage; URL shown on display at boot
 - **Track status test mode** — trigger any flag condition or the session-finished animation directly from the web UI without waiting for a live session
 - **Boot-time OTA check** — checks a remote manifest, installs newer firmware, and reboots automatically
 - **OTA status screen** — shows OTA check / download / install progress on the TFT during boot
@@ -159,7 +159,7 @@ platformio device monitor --baud 115200
 | State | Effect |
 |-------|--------|
 | WiFi / NTP connecting | Breathing white |
-| Idle (no session) | All LEDs dim red, last 4 LEDs show battery level (1–4) with top bar pulsing |
+| Idle (no session) | All LEDs dim red, last 4 LEDs show battery level (1–4) with top bar pulsing; or static full battery when animation is off |
 | Connecting to SignalR | Gentle blue breathing |
 | 🟢 Green flag | Solid green |
 | 🟡 Yellow flag | Fast yellow blink |
@@ -167,7 +167,7 @@ platformio device monitor --baud 115200
 | 🟠 VSC | Slow orange pulse |
 | 🟢 VSC Ending | Pulsating green (ramps between dim and full brightness) |
 | 🔴 Red flag | Rapid red flash |
-| Race session overlay | Last 4 LEDs show a draining battery bar over race duration |
+| Race session overlay | Last 4 LEDs show a draining battery bar over race duration; static full battery when animation is off |
 | 🏁 Session finished | Chequered sweep → 3× white flash → fade (~3 s) |
 
 ---
@@ -228,7 +228,8 @@ Open `http://<device-ip>/` in a browser to access the settings page:
 | Setting | Description |
 |---------|-------------|
 | **LED Brightness** | Slider (0–255). Applies immediately; persisted across reboots. |
-| **Idle Battery Level** | Fixed range `1–4`; shows that many bars with the top bar pulsing. Persisted. |
+| **Idle Battery Level** | Fixed range `1–4`; shows that many bars with the top bar pulsing. Only used when battery animation is on. Persisted. |
+| **Race Battery Animation** | Checkbox. On: battery drains over race duration (idle: configured bars with pulse). Off: static full battery (4 bars, no pulse) in both idle and race. Persisted. |
 | **Track Test Mode** | Toggle on to override live data with a chosen track status for previewing effects. Not persisted. |
 | **Track Status** | Dropdown: Clear / Yellow / Safety Car / Red Flag / VSC / VSC End / Session Finished. Active when test mode is on. |
 | **Reboot Device** | Reboots the device from the web UI after confirmation. |

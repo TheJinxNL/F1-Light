@@ -20,5 +20,8 @@ uint8_t webUiGetIdleBatteryBars();
 bool webUiTrackTestEnabled();
 uint8_t webUiTrackTestStatusCode();
 
+// Race battery overlay toggle (persisted).
+bool webUiGetRaceBatteryEnabled();
+
 // Human-readable URL, e.g. "http://192.168.1.42" (empty if not running).
 const char* webUiGetUrl();

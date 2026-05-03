@@ -106,6 +106,17 @@ Manifest URL and version are in `config.h`. Boot-time OTA check is controlled by
 - `displayShowFinished()` — chequered flag pattern full-screen + "FINISHED" in red; shown once on `SESSION_ENDED` state entry
 - RGB565 palette: `COL_BG=0x0000`, `COL_RED=0xF800`, `COL_GREEN=0x07E0`, `COL_YELLOW=0xFFE0`, `COL_ORANGE=0xFD20`, `COL_DGRAY=0x2104`, `COL_LGRAY=0xC618`
 
+## Battery Animation (effects.cpp / web_ui)
+- `effectRaceBatteryOverlay(bool raceSession, time_t raceStartUtc, bool animated)` — overlays last 4 LEDs
+  - `animated=true`: time-based drain over `RACE_BATTERY_DRAIN_MS`; top bar pulses
+  - `animated=false`: static full battery — 4 solid bars at brightness 200, no pulse
+  - `raceSession=false`: overlay suppressed entirely (resets pulse state)
+- `effectIdle()` also checks `webUiGetRaceBatteryEnabled()`:
+  - `true`: shows configured idle bars (1–4) with the top bar pulsing
+  - `false`: static full battery — 4 solid bars at `IDLE_BASE_RED`, no pulse
+- `webUiGetRaceBatteryEnabled()` reads `g_raceBatteryEnabled` (NVS key `raceBatt`, default `true`)
+- Both race overlay and idle mode read the same toggle — turning it off gives a static full battery everywhere
+
 ## State Machine (main.cpp / f1_live.h)
 - States: `WIFI_CONNECTING`, `NTP_SYNC`, `IDLE`, `CONNECTING`, `LIVE`, `RECONNECTING`, `SESSION_ENDED`
 - `SESSION_ENDED` — fires when `SessionStatus` delivers "Finished"/"Finalised"/"Aborted". `f1LiveLoop()` advances to IDLE on the very next call (single-pass hold). The `stateChanged` block in `main.cpp` runs `displayShowFinished()` + `effectSessionFinished()` (blocking, ~3 s) before that transition completes.

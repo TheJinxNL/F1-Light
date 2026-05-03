@@ -14,13 +14,15 @@ static uint8_t g_ledBrightness = MAX_BRIGHTNESS;
 static uint8_t g_idleBatteryBars = 1;  // 1-4 = manual bars
 static bool g_trackTestMode = false;
 static uint8_t g_trackTestStatus = 1;  // 1=CLEAR,2=YELLOW,4=SC,5=RED,6=VSC,7=VSC_END,99=SESSION_FINISHED
+static bool g_raceBatteryEnabled = true;
 static char g_url[40] = {0};
 static bool g_rebootPending = false;
 static uint32_t g_rebootAtMs = 0;
 
 static const char* PREF_NAMESPACE = "f1light";
-static const char* PREF_LED_BRIGHT = "ledBright";
-static const char* PREF_IDLE_BARS  = "idleBars";
+static const char* PREF_LED_BRIGHT  = "ledBright";
+static const char* PREF_IDLE_BARS   = "idleBars";
+static const char* PREF_RACE_BATT   = "raceBatt";
 
 static const char kHtmlPage[] PROGMEM = R"HTML(
 <!doctype html>
@@ -53,6 +55,14 @@ static const char kHtmlPage[] PROGMEM = R"HTML(
     <div class='row'><span>1</span><strong id='ibv'>1</strong><span>4</span></div>
     <input id='ib' type='range' min='1' max='4' value='1'>
 
+    <label>Race battery animation
+      <div class='row' style='margin-top:6px'>
+        <span>Off</span>
+        <input id='rb' type='checkbox' style='width:auto;margin:0 8px'>
+        <span>On</span>
+      </div>
+    </label>
+
     <label for='tm'>Track status test mode</label>
     <div class='row'><span>Off</span><strong id='tmv'>Off</strong><span>On</span></div>
     <input id='tm' type='range' min='0' max='1' value='0'>
@@ -80,6 +90,7 @@ static const char kHtmlPage[] PROGMEM = R"HTML(
     const v=document.getElementById('v');
     const ib=document.getElementById('ib');
     const ibv=document.getElementById('ibv');
+    const rb=document.getElementById('rb');
     const tm=document.getElementById('tm');
     const tmv=document.getElementById('tmv');
     const ts=document.getElementById('ts');
@@ -96,6 +107,7 @@ static const char kHtmlPage[] PROGMEM = R"HTML(
         const j=await res.json();
         if (typeof j.brightness==='number') b.value=String(j.brightness);
         if (typeof j.idleBatteryBars==='number') ib.value=String(j.idleBatteryBars);
+        if (typeof j.raceBatteryEnabled==='number') rb.checked=(j.raceBatteryEnabled!==0);
         if (typeof j.trackTestMode==='number') tm.value=String(j.trackTestMode?1:0);
         if (typeof j.trackTestStatus==='number') ts.value=String(j.trackTestStatus);
         syncLabels();
@@ -109,6 +121,7 @@ static const char kHtmlPage[] PROGMEM = R"HTML(
     document.getElementById('save').addEventListener('click',async()=>{
       await fetch('/api/brightness',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'value='+encodeURIComponent(b.value)});
       await fetch('/api/idle-battery',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'bars='+encodeURIComponent(ib.value)});
+      await fetch('/api/race-battery',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'enabled='+(rb.checked?'1':'0')});
       await fetch('/api/test-track',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'mode='+encodeURIComponent(tm.value)+'&status='+encodeURIComponent(ts.value)});
       await loadState();
     });
@@ -137,6 +150,7 @@ static void loadPrefsIfNeeded() {
   if (bars < 1) bars = 1;
   if (bars > 4) bars = 4;
   g_idleBatteryBars = bars;
+  g_raceBatteryEnabled = g_prefs.getBool(PREF_RACE_BATT, true);
 }
 
 static void handleRoot() {
@@ -148,6 +162,7 @@ static void handleGetBrightness() {
               + ",\"idleBatteryBars\":" + String(g_idleBatteryBars)
               + ",\"trackTestMode\":" + String(g_trackTestMode ? 1 : 0)
               + ",\"trackTestStatus\":" + String(g_trackTestStatus)
+              + ",\"raceBatteryEnabled\":" + String(g_raceBatteryEnabled ? 1 : 0)
               + "}";
   g_server.send(200, "application/json", json);
 }
@@ -208,6 +223,16 @@ static void handleSetTestTrack() {
   g_server.send(200, "application/json", "{\"ok\":true}");
 }
 
+static void handleSetRaceBattery() {
+  if (!g_server.hasArg("enabled")) {
+    g_server.send(400, "application/json", "{\"ok\":false,\"error\":\"missing enabled\"}");
+    return;
+  }
+  g_raceBatteryEnabled = (g_server.arg("enabled").toInt() != 0);
+  if (g_prefsReady) g_prefs.putBool(PREF_RACE_BATT, g_raceBatteryEnabled);
+  g_server.send(200, "application/json", "{\"ok\":true}");
+}
+
 static void handleReboot() {
   g_rebootPending = true;
   g_rebootAtMs = millis() + 700;
@@ -225,9 +250,10 @@ void webUiBegin() {
   g_server.on("/api/brightness", HTTP_POST, handleSetBrightness);
   g_server.on("/api/idle-battery", HTTP_GET, handleGetIdleBattery);
   g_server.on("/api/idle-battery", HTTP_POST, handleSetIdleBattery);
-  g_server.on("/api/test-track", HTTP_GET, handleGetTestTrack);
-  g_server.on("/api/test-track", HTTP_POST, handleSetTestTrack);
-  g_server.on("/api/reboot", HTTP_POST, handleReboot);
+  g_server.on("/api/test-track",    HTTP_GET,  handleGetTestTrack);
+  g_server.on("/api/test-track",    HTTP_POST, handleSetTestTrack);
+  g_server.on("/api/race-battery",  HTTP_POST, handleSetRaceBattery);
+  g_server.on("/api/reboot",        HTTP_POST, handleReboot);
   g_server.onNotFound([]() {
     g_server.send(404, "text/plain", "Not found");
   });
@@ -283,4 +309,8 @@ uint8_t webUiTrackTestStatusCode() {
 
 const char* webUiGetUrl() {
   return g_url;
+}
+
+bool webUiGetRaceBatteryEnabled() {
+  return g_raceBatteryEnabled;
 }

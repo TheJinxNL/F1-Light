@@ -130,6 +130,7 @@ static String   g_signalrCookie         = "";     // raw Set-Cookie from negotia
 static bool     g_activeSessionIsRace   = false;  // true if current active session name contains "Race"
 static time_t   g_activeSessionStartUtc = 0;      // UTC start of currently active session
 static bool     g_bootOtaChecked        = false;  // one-shot guard for boot-time OTA check
+static int      g_currentYear           = 0;       // calendar year cached at NTP sync, used for URL building
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 static int compareVersionText(const char* current, const char* remote) {
@@ -358,20 +359,12 @@ static time_t parseIso8601(const char* dateStr, const char* gmtOffset) {
  */
 static bool isSessionWindowActive() {
   char url[80];
-  struct tm t = {};
   time_t now = utcNow();
-  
+  int year = g_currentYear;
+
   // Sanity check: if time hasn't been synced yet, don't attempt the request
   // (year would be invalid, causing 403).
-  if (now < MIN_VALID_UTC_EPOCH) {
-    return false;
-  }
-
-  if (!gmtime_r(&now, &t)) {
-    return false;
-  }
-  int year = t.tm_year + 1900;
-  if (year < MIN_VALID_UTC_YEAR || year > MAX_VALID_UTC_YEAR) {
+  if (now < MIN_VALID_UTC_EPOCH || year < MIN_VALID_UTC_YEAR || year > MAX_VALID_UTC_YEAR) {
     return false;
   }
 
@@ -667,18 +660,45 @@ static void fetchChampStandings() {
 }
 
 /**
+ * Try to add one non-practice session to g_upcomingSessions.
+ * Plain static function — no lambda captures — so time_t comparisons are
+ * unambiguous regardless of how ESP32 Arduino core 3.x sizes time_t.
+ * cutoffUtc = now - 4h; sessions that started before this are skipped.
+ */
+static void addUpcomingIfFresh(const char* meetingName, const char* sName,
+                                const char* startStr,   const char* gmtOffset,
+                                uint32_t    cutoffU32) {
+  if (strncasecmp(sName, "Practice", 8) == 0 ||
+      strncasecmp(sName, "Free",     4) == 0) return;
+
+  time_t sessionStart = parseIso8601(startStr, gmtOffset);
+  if (sessionStart == 0) return;
+
+  // Use uint32_t for comparison — all F1 session timestamps for 2026-2099
+  // fit in 32 bits and this avoids any 64-bit time_t upper-bit corruption.
+  if ((uint32_t)sessionStart < cutoffU32) return;
+  if (g_upcomingCount >= MAX_UPCOMING_SESSIONS) return;
+
+  SessionInfo& si = g_upcomingSessions[g_upcomingCount++];
+  strncpy(si.meetingName, meetingName, sizeof(si.meetingName) - 1);
+  si.meetingName[sizeof(si.meetingName) - 1] = '\0';
+  strncpy(si.sessionName, sName, sizeof(si.sessionName) - 1);
+  si.sessionName[sizeof(si.sessionName) - 1] = '\0';
+  si.startUtc = (uint32_t)sessionStart;  // strip any garbage upper bits from int64_t time_t
+}
+
+/**
  * Primary schedule source: livetiming Index.json for current year.
  * Populates g_upcomingSessions with future non-practice sessions.
  */
 static void fetchUpcomingFromIndex() {
   char url[80];
-  struct tm t = {};
-  time_t now = utcNow();
+  int year = g_currentYear;  // cached at NTP sync — if valid, clock is good
 
-  if (now < MIN_VALID_UTC_EPOCH) return;
-  if (!gmtime_r(&now, &t)) return;
-  int year = t.tm_year + 1900;
-  if (year < MIN_VALID_UTC_YEAR || year > MAX_VALID_UTC_YEAR) return;
+  if (year < MIN_VALID_UTC_YEAR || year > MAX_VALID_UTC_YEAR) {
+    Serial.printf("[F1] Index schedule: year=%d invalid, skipping\n", year);
+    return;
+  }
 
   snprintf(url, sizeof(url),
            "https://livetiming.formula1.com/static/%04d/Index.json",
@@ -698,62 +718,89 @@ static void fetchUpcomingFromIndex() {
   if (code != 200) {
     Serial.printf("[F1] Index schedule HTTP %d\n", code);
     http.end();
+    g_tlsClient.stop();
     return;
+  }
+
+  // ── BOM stripping — identical pattern to isSessionWindowActive() ────────────
+  WiFiClient* stream = http.getStreamPtr();
+
+  struct PrependStream : public Stream {
+    uint8_t     buf[3];
+    uint8_t     len  = 0;
+    uint8_t     idx  = 0;
+    WiFiClient* src  = nullptr;
+    int  available() override { return (len - idx) + src->available(); }
+    int  read()      override { return idx < len ? buf[idx++] : src->read(); }
+    int  peek()      override { return idx < len ? buf[idx]   : src->peek(); }
+    size_t write(uint8_t) override { return 0; }
+  } ps;
+  ps.src = stream;
+
+  uint32_t t0 = millis();
+  while (stream->available() < 3 && millis() - t0 < 2000) delay(1);
+
+  if (stream->available() >= 3) {
+    uint8_t bom[3];
+    stream->readBytes(bom, 3);
+    if (bom[0] == 0xEF && bom[1] == 0xBB && bom[2] == 0xBF) {
+      Serial.println("[F1] Schedule BOM stripped");
+      // BOM discarded — stream now starts at first '{'
+    } else if (bom[0] == '{') {
+      ps.buf[0] = bom[0]; ps.buf[1] = bom[1]; ps.buf[2] = bom[2];
+      ps.len    = 3;
+    } else {
+      Serial.printf("[F1] Schedule unexpected start: 0x%02X 0x%02X 0x%02X\n",
+                    bom[0], bom[1], bom[2]);
+      http.end();
+      g_tlsClient.stop();
+      return;
+    }
   }
 
   JsonDocument filter;
   filter["Meetings"][0]["Name"]                     = true;
   filter["Meetings"][0]["Sessions"][0]["Name"]      = true;
   filter["Meetings"][0]["Sessions"][0]["StartDate"] = true;
-  filter["Meetings"][0]["Sessions"][0]["EndDate"]   = true;
   filter["Meetings"][0]["Sessions"][0]["GmtOffset"] = true;
 
   JsonDocument doc;
+  Stream& src = (ps.len > 0) ? static_cast<Stream&>(ps) : static_cast<Stream&>(*stream);
   DeserializationError err = deserializeJson(
-      doc, http.getStream(), DeserializationOption::Filter(filter));
+      doc, src, DeserializationOption::Filter(filter));
   http.end();
 
   if (err) {
     Serial.printf("[F1] Index schedule JSON error: %s\n", err.c_str());
+    g_tlsClient.stop();
     return;
   }
+
+  // Compute 'now' AFTER http.end() — time() is corrupted during TLS sessions
+  // on ESP-IDF 5.x (ESP32 Arduino core 3.x).
+  time_t now       = time(nullptr);
+  // uint32_t cutoff: avoids any 64-bit time_t corruption inside closures.
+  // All F1 sessions from 2026 onward fit in 32 bits (max ~year 2106).
+  uint32_t cutoffU32 = (uint32_t)(now - (time_t)(4 * 3600));
 
   JsonArray meetings = doc["Meetings"].as<JsonArray>();
   for (JsonObject meeting : meetings) {
     const char* meetingName = meeting["Name"] | "F1 Grand Prix";
     JsonVariant sv = meeting["Sessions"];
 
-    auto addSession = [&](JsonObject session) {
-      const char* sName = session["Name"] | "Session";
-      if (strncasecmp(sName, "Practice", 8) == 0 ||
-          strncasecmp(sName, "Free", 4) == 0) {
-        return;
-      }
-
-      const char* startStr  = session["StartDate"];
-      const char* endStr    = session["EndDate"];
-      const char* gmtOffset = session["GmtOffset"];
-
-      time_t sessionStart = parseIso8601(startStr, gmtOffset);
-      time_t sessionEnd   = parseIso8601(endStr, gmtOffset);
-      if (sessionStart == 0) return;
-      if (sessionEnd <= sessionStart) sessionEnd = sessionStart + 7200;
-      if (sessionEnd <= now) return;
-      if (g_upcomingCount >= MAX_UPCOMING_SESSIONS) return;
-
-      SessionInfo& si = g_upcomingSessions[g_upcomingCount++];
-      strncpy(si.meetingName, meetingName, sizeof(si.meetingName) - 1);
-      si.meetingName[sizeof(si.meetingName) - 1] = '\0';
-      strncpy(si.sessionName, sName, sizeof(si.sessionName) - 1);
-      si.sessionName[sizeof(si.sessionName) - 1] = '\0';
-      si.startUtc = sessionStart;
-    };
-
     if (sv.is<JsonArray>()) {
-      for (JsonObject s : sv.as<JsonArray>()) addSession(s);
+      for (JsonObject s : sv.as<JsonArray>()) {
+        addUpcomingIfFresh(meetingName, s["Name"] | "Session",
+                           s["StartDate"], s["GmtOffset"], cutoffU32);
+        if (g_upcomingCount >= MAX_UPCOMING_SESSIONS) break;
+      }
     } else if (sv.is<JsonObject>()) {
       for (JsonPair kv : sv.as<JsonObject>()) {
-        if (kv.value().is<JsonObject>()) addSession(kv.value().as<JsonObject>());
+        if (!kv.value().is<JsonObject>()) continue;
+        JsonObject s = kv.value().as<JsonObject>();
+        addUpcomingIfFresh(meetingName, s["Name"] | "Session",
+                           s["StartDate"], s["GmtOffset"], cutoffU32);
+        if (g_upcomingCount >= MAX_UPCOMING_SESSIONS) break;
       }
     }
 
@@ -838,7 +885,7 @@ static void fetchEventTracker() {
     return;
   }
 
-  time_t now = utcNow();
+  uint32_t cutoffU32 = (uint32_t)(utcNow() - (time_t)(4 * 3600));
   // Reset and repopulate upcoming sessions from the timetable
   g_upcomingCount = 0;
   for (JsonObject item : ttv.as<JsonArray>()) {
@@ -850,15 +897,12 @@ static void fetchEventTracker() {
         strncasecmp(sName, "Free",     4) == 0) continue;
 
     const char* startStr  = item["startTime"];
-    const char* endStr    = item["endTime"];
     const char* gmtOffset = item["gmtOffset"];
 
     time_t sessionStart = parseIso8601(startStr, gmtOffset);
-    time_t sessionEnd   = parseIso8601(endStr,   gmtOffset);
 
     if (sessionStart == 0) continue;
-    if (sessionEnd <= sessionStart) sessionEnd = sessionStart + 7200;
-    if (sessionEnd <= now)          continue;  // already finished
+    if ((uint32_t)sessionStart < cutoffU32) continue;  // started >4h ago
     if (g_upcomingCount >= MAX_UPCOMING_SESSIONS) break;
 
     SessionInfo& si = g_upcomingSessions[g_upcomingCount++];
@@ -866,7 +910,7 @@ static void fetchEventTracker() {
     si.meetingName[sizeof(si.meetingName) - 1] = '\0';
     strncpy(si.sessionName, sName, sizeof(si.sessionName) - 1);
     si.sessionName[sizeof(si.sessionName) - 1] = '\0';
-    si.startUtc = sessionStart;
+    si.startUtc = (uint32_t)sessionStart;  // strip any garbage upper bits
 
     Serial.printf("[F1]   ET session: %-20s  start=%ld\n", sName, (long)sessionStart);
   }
@@ -891,11 +935,11 @@ static void fetchUpcomingSchedule() {
   }
   if (g_upcomingCount > 0) {
     const SessionInfo& first = g_upcomingSessions[0];
-    Serial.printf("[F1] Next session (%s): %s / %s @ %ld\n",
+    Serial.printf("[F1] Next session (%s): %s / %s @ %lu\n",
                   source,
                   first.meetingName,
                   first.sessionName,
-                  (long)first.startUtc);
+                  (unsigned long)first.startUtc);
     g_nextEmptyScheduleRetryMs = 0;
   } else {
     Serial.println("[F1] Next session: none");
@@ -1318,6 +1362,7 @@ void f1LiveLoop() {
       Serial.printf("[F1] NTP synced: %04d-%02d-%02dT%02d:%02d:%02dZ\n",
                     year, t.tm_mon + 1, t.tm_mday,
                     t.tm_hour, t.tm_min, t.tm_sec);
+      g_currentYear = year;  // cache for URL building — avoids repeated gmtime_r after TLS ops
       otaCheckAtBoot();
       g_state      = F1State::IDLE;
       g_nextPollMs = 0;  // force immediate poll (now >= 0 is always true)

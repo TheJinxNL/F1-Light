@@ -207,7 +207,7 @@ All constants live in [src/config.h](src/config.h):
 | `WIFI_MANAGER_TIMEOUT` | 180 | Portal auto-close timeout (seconds) |
 | `WIFI_RESET_PIN` | 0 | GPIO held LOW at boot to reset WiFi credentials |
 | `F1_POLL_INTERVAL_MS` | 60000 | How often to poll the F1 schedule (ms) |
-| `FW_VERSION` | `"1.0.4"` | Current firmware version used for OTA comparison |
+| `FW_VERSION` | `"1.0.12"` | Current firmware version used for OTA comparison |
 | `OTA_BOOT_CHECK_ENABLED` | 1 | Enable/disable boot-time OTA check |
 | `OTA_MANIFEST_URL` | `"https://www.jinx.nl/f1-light/update/manifest.json"` | Remote OTA manifest URL |
 | `OTA_MANIFEST_TIMEOUT_MS` | 7000 | Manifest request timeout (ms) |
@@ -270,7 +270,16 @@ Schedule fallback order used by firmware:
 1. `Index.json` (primary)
 2. `event-tracker` (secondary)
 
-Note: F1 sometimes changes what `Index.json` or `event-tracker` include during the season.
+Note: F1 sometimes changes what `Index.json` or `event-tracker` include during the season. `Index.json` only lists rounds F1 has published — early in the year (first 4–6 rounds) future races may be absent, which is why the event-tracker fallback exists.
+
+### ESP32 time_t / clock quirks
+
+On ESP32 Arduino core 3.x (ESP-IDF 5.x) `time_t` is a 64-bit `int64_t`. The upper 32 bits can contain garbage in two situations:
+
+1. **During or immediately after a TLS session** — `time()` returns a corrupt value. Always call `time(nullptr)` **after** `http.end()`.
+2. **C++ lambda value-captures of `time_t`** — the captured variable prints correctly via `(long)` cast but the actual 64-bit comparison uses garbage upper bits, causing future sessions to appear past. Use plain `static` helper functions instead of lambdas.
+
+The firmware works around both issues by storing session timestamps as `uint32_t` (all F1 dates 2026–2099 fit in 32 bits) and casting `time(nullptr)` to `uint32_t` before every comparison.
 
 Track status codes received over the feed:
 

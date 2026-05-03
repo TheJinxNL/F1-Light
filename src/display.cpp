@@ -330,10 +330,12 @@ void displayShowIdle() {
   // Skip sessions that have clearly ended already (started > 4 h ago).
   // This prevents stale data showing after a race during the 30-min post-window
   // before the next Index.json poll fires.
-  time_t nowTs = time(nullptr);
+  // Use uint32_t for 'now' — time() on ESP-IDF 5.x returns int64_t time_t whose
+  // upper 32 bits can contain garbage. uint32_t covers all valid F1 timestamps.
+  uint32_t nowTs = (uint32_t)time(nullptr);
   uint8_t first = 0;
   while (first < g_upcomingCount &&
-         g_upcomingSessions[first].startUtc + 4 * 3600L < nowTs) {
+         g_upcomingSessions[first].startUtc + 14400u < nowTs) {
     first++;
   }
 
@@ -422,8 +424,8 @@ void displayShowIdle() {
     curMeeting = g_upcomingSessions[i].meetingName;
 
     char timeBuf[8], dateBuf[16];
-    fmtTime(g_upcomingSessions[i].startUtc, timeBuf, sizeof(timeBuf));
-    fmtDate(g_upcomingSessions[i].startUtc, dateBuf, sizeof(dateBuf));
+    fmtTime((time_t)g_upcomingSessions[i].startUtc, timeBuf, sizeof(timeBuf));
+    fmtDate((time_t)g_upcomingSessions[i].startUtc, dateBuf, sizeof(dateBuf));
 
     // Session name — yellow, FreeSans12pt
     g_tft.setFont(&Formula1_Display_Regular11pt7b);

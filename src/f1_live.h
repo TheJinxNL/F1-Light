@@ -29,9 +29,9 @@ enum class F1State : uint8_t {
 #define MAX_UPCOMING_SESSIONS 12
 
 struct SessionInfo {
-  char   meetingName[50];  // e.g. "Chinese Grand Prix"
-  char   sessionName[24];  // e.g. "Sprint", "Qualifying", "Race"
-  time_t startUtc;         // UTC epoch seconds
+  char     meetingName[50];  // e.g. "Chinese Grand Prix"
+  char     sessionName[24];  // e.g. "Sprint", "Qualifying", "Race"
+  uint32_t startUtc;          // UTC epoch seconds (uint32_t — avoids int64_t time_t upper-bit corruption on ESP-IDF 5.x)
 };
 
 /** Number of entries valid in g_upcomingSessions[] after the latest poll. */

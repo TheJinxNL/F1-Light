@@ -46,6 +46,9 @@
 - Time is always UTC internally (`setenv("TZ","UTC0",1)`); display TZ applied separately via `DISPLAY_TZ_POSIX`.
 - `g_tlsClient.stop()` after every HTTPS request to reclaim ~40 KB TLS heap.
 - Event-tracker and standings fetches use their own local `WiFiClientSecure` (different domain).
+- **`time_t` is `int64_t` on ESP32 Arduino core 3.x / ESP-IDF 5.x** — the upper 32 bits can contain garbage, especially when `time()` or `gmtime_r()` is called during or immediately after a TLS session. **Always cast to `uint32_t` before storing or comparing session timestamps.** All valid F1 timestamps (2026–2099) fit in 32 bits.
+- **Never use C++ lambdas that capture `time_t` variables by value on ESP32 Arduino core 3.x** — the captured value prints correctly via `(long)` but the actual comparison uses garbage upper bits. Use plain `static` helper functions instead.
+- **`time()` must be called after `http.end()`** — calling it during an active TLS/HTTP session returns a corrupted value on ESP-IDF 5.x.
 
 ## Build & Flash
 
@@ -93,6 +96,7 @@ Manifest URL and version are in `config.h`. Boot-time OTA check is controlled by
 - **BOM stripping in streaming mode**: `WiFiClient` has no `unread()`. Use a `PrependStream` struct (extends `Stream`) with a 3-byte buffer: peek first 3 bytes, discard if UTF-8 BOM (`0xEF 0xBB 0xBF`), otherwise route them through the prepend buffer before the live stream
 - Never set timing globals (`g_lastHeartbeatMs`, `g_connectedAtMs`) inside WStype_CONNECTED callbacks — this causes a 1 ms underflow when compared to `millis()` in the main loop. Set them via an edge-detector in the main loop instead
 - Use absolute timestamps (`g_nextPollMs = millis() + interval`) not relative `now - g_lastMs` comparisons to avoid unsigned underflow on boot
+- **`time_t` comparison pitfall**: On ESP-IDF 5.x, `time_t` is `int64_t`. Storing session start times as `uint32_t` (in `SessionInfo.startUtc`) and casting `time(nullptr)` to `uint32_t` before any arithmetic or comparison is the only reliable approach. Never compare raw `time_t` values that passed through a TLS session context.
 
 ## Display Screens (display.cpp)
 - `displayShowIdle()` — session schedule: next meeting name + up to 3 upcoming sessions with countdown
@@ -115,6 +119,10 @@ Manifest URL and version are in `config.h`. Boot-time OTA check is controlled by
 - `f1ChampRefreshed()` always caches the new data; redraws immediately only if currently showing the standings view (`s_idleView == 1`) — otherwise the data is ready for the next view switch
 - Championship standings are fetched once on first IDLE entry then every 30 minutes
 - `g_scheduleRefreshed` is set unconditionally at the end of `fetchUpcomingSchedule()` (even when `g_upcomingCount == 0`) so the display redraws after a race ends and no future sessions are listed yet
+
+- `g_currentYear` is cached once at NTP sync and used for URL construction everywhere — **never call `gmtime_r()` after a TLS operation** as it returns garbage on ESP-IDF 5.x.
+- Session timestamps are stored as `uint32_t startUtc` in `SessionInfo` (not `time_t`) — see Code Conventions above.
+- `addUpcomingIfFresh()` is a `static` helper (not a lambda) that filters and stores one session; it takes `uint32_t cutoffU32 = (uint32_t)(now - 4h)` to avoid all 64-bit time_t issues.
 
 ## Development Guidelines
 - Suggest Arduino-compatible C++ code only

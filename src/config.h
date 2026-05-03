@@ -46,7 +46,7 @@
 
 // ─── OTA update checks ───────────────────────────────────────────────────────
 // Firmware version used for boot-time update checks.
-#define FW_VERSION "1.0.10"
+#define FW_VERSION "1.0.12"
 // Boot-time OTA is optional; set to 0 to disable remote update checks.
 #define OTA_BOOT_CHECK_ENABLED 1
 // Manifest endpoint checked once per boot after WiFi + NTP are ready.

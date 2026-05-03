@@ -208,9 +208,9 @@ void loop() {
       // Countdown: if the first upcoming session starts within 5 minutes, show
       // the countdown screen and suppress the view alternation timer.
       if (g_upcomingCount > 0) {
-        time_t nowTs   = time(nullptr);
-        long   secsTo  = (long)(g_upcomingSessions[0].startUtc - nowTs);
-        bool   wantCd  = (secsTo >= 0 && secsTo <= COUNTDOWN_WINDOW_SEC);
+        uint32_t nowTs  = (uint32_t)time(nullptr);  // uint32_t strips int64_t time_t garbage upper bits
+        int32_t  secsTo = (int32_t)(g_upcomingSessions[0].startUtc - nowTs);
+        bool     wantCd = (secsTo >= 0 && secsTo <= COUNTDOWN_WINDOW_SEC);
 
         if (wantCd && !s_inCountdown) {
           // Entering countdown
@@ -228,8 +228,8 @@ void loop() {
           uint32_t nowMs = millis();
           if (nowMs - s_lastCountdownMs >= 1000) {
             s_lastCountdownMs = nowMs;
-            time_t nowTs2 = time(nullptr);
-            int32_t secs = (int32_t)(g_upcomingSessions[0].startUtc - nowTs2);
+            uint32_t nowTs2 = (uint32_t)time(nullptr);
+            int32_t  secs   = (int32_t)(g_upcomingSessions[0].startUtc - nowTs2);
             if (secs < 0) secs = 0;
             displayShowCountdown(secs, g_upcomingSessions[0].sessionName);
           }

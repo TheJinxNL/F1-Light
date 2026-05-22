@@ -24,7 +24,7 @@
 #define TFT_CS     15   // Chip Select
 #define TFT_DC     27   // Data / Command  (moved from GPIO 2 — reserved by WiFi PHY)
 #define TFT_RST     4   // Reset (tie to 3.3 V and change to -1 if no reset pin)
-#define TFT_BL     13   // Backlight PWM pin  (set to -1 if wired directly to 3.3 V)
+#define TFT_BL      2   // Backlight PWM pin — GPIO 13 is USB D+ on ESP32-C6, must not be used
 #define TFT_BL_DEFAULT  200  // Default backlight brightness 0–255
 #define TFT_WIDTH  170
 #define TFT_HEIGHT 320
@@ -67,7 +67,7 @@
 #define F1_POST_WINDOW_MS   (30UL * 60UL * 1000UL)   // 30 min after
 
 // ─── Hardware Configuration ───────────────────────────────────────────────────
-#define LED_PIN        18       // GPIO pin connected to LED data line
+#define LED_PIN         8       // GPIO pin connected to LED data line
 #define NUM_LEDS       18      // Total number of LEDs in the strip
 #define LED_TYPE       WS2812B // LED chipset type
 #define COLOR_ORDER    GRB     // Color byte order for your strip

@@ -1,4 +1,4 @@
-# F1 Light — ESP32 LED + TFT Display Controller
+# F1 Light — ESP32-C6 SuperMini LED + TFT Display Controller
 
 A live-connected ESP32 project that tracks the **official F1 Live Timing feed** and reacts in real time:
 - An 18-LED WS2812B strip animates the current track status (green / yellow / safety car / VSC / red flag)
@@ -36,40 +36,42 @@ Inspiration on how to access the F1 Live Feeds: https://github.com/Nicxe/f1_sens
 
 | Component | Detail |
 |---|---|
-| Microcontroller | ESP32 DevKit (any 30-pin or 38-pin variant) |
-| LED strip | WS2812B / NeoPixel — 18 LEDs |
+| Microcontroller | ESP32-C6 SuperMini (ESP32-C6-MINI-1 module, RISC-V, 160 MHz, 320 KB RAM, 4 MB flash) |
+| LED | WS2812B onboard RGB LED (GPIO 8) or external WS2812B strip up to 18 LEDs |
 | Display | 1.9″ ST7789 TFT, 170×320 px |
-| Power | 5 V / ≥ 2 A (LED strip draws up to 1 A at full brightness) |
+| Power | 5 V via USB-C; external LED strip requires 5 V / ≥ 2 A rail |
 
 ---
 
 ## Wiring
 
 ### LED Strip
-| ESP32 | LED Strip |
+| ESP32-C6 | LED Strip |
 |---|---|
-| GPIO 18 | DATA |
+| GPIO 8 | DATA (onboard WS2812B RGB LED — no wiring needed) |
 | GND | GND |
-| 5 V rail | +5 V |
+| 5 V rail | +5 V (external strip only) |
+
+> To use an external strip instead, change `LED_PIN` in [src/config.h](src/config.h) to a free GPIO and wire accordingly.
 
 ### TFT Display (ST7789)
-| ESP32   | Display pin | Notes |
-|---------|-------------|-------|
-| GPIO 23 | SDA / DIN   | MOSI — data |
-| GPIO 14 | SCL / CLK   | SPI clock |
-| GPIO 15 | CS          | Chip select |
-| GPIO 27 | DC / RS     | Data/command |
-| GPIO 4  | RES / RST   | Reset — or tie to 3.3 V and set `TFT_RST -1` |
-| GPIO 13 | BL          | Backlight PWM |
-| 3.3 V   | VCC         | |
-| GND     | GND         | |
+| ESP32-C6 | Display pin | Notes |
+|----------|-------------|-------|
+| GPIO 23  | SDA / DIN   | MOSI — data |
+| GPIO 14  | SCL / CLK   | SPI clock |
+| GPIO 15  | CS          | Chip select |
+| GPIO 27  | DC / RS     | Data/command |
+| GPIO 4   | RES / RST   | Reset — or tie to 3.3 V and set `TFT_RST -1` |
+| GPIO 2   | BL          | Backlight PWM |
+| 3.3 V    | VCC         | |
+| GND      | GND         | |
 
 > All pin numbers can be changed in [src/config.h](src/config.h).  
-> **Avoid GPIO 2** — can interfere with boot/flash on some boards.  
+> **Never use GPIO 12 or GPIO 13** — these are USB D− / D+ on the ESP32-C6 SuperMini. Driving them will break the USB serial monitor and may crash the device.  
 > **Avoid GPIO 6–11** — connected to internal SPI flash.
 
 ### WiFi Reset Button
-Hold **GPIO 0** (the built-in BOOT button on most DevKits) while powering on to erase saved WiFi credentials and open the configuration portal. No extra wiring needed.
+Hold **GPIO 0** (the built-in BOOT button on the ESP32-C6 SuperMini) while powering on to erase saved WiFi credentials and open the configuration portal. No extra wiring needed.
 
 ---
 
@@ -196,11 +198,12 @@ All constants live in [src/config.h](src/config.h):
 
 | Constant | Default | Description |
 | ---------|---------|-------------|
-| `LED_PIN` | 18 | GPIO for LED strip data |
+| `LED_PIN` | 8 | GPIO for LED data — GPIO 8 is the onboard WS2812B RGB LED on the SuperMini |
 | `NUM_LEDS` | 18 | Number of LEDs |
 | `MAX_BRIGHTNESS` | 200 | LED brightness cap (0–255); overridden at runtime via web UI |
 | `DIM_BRIGHTNESS` | 50 | Reduced LED brightness used for secondary/dim states |
 | `IDLE_BASE_RED` | 180 | Red channel level (0–255) for all LEDs in idle state |
+| `TFT_BL` | 2 | GPIO for backlight PWM (GPIO 13 must not be used on C6 — it is USB D+) |
 | `TFT_BL_DEFAULT` | 200 | Backlight brightness at idle (0–255) |
 | `DISPLAY_TZ_POSIX` | `"CET-1CEST,M3.5.0,M10.5.0/3"` | POSIX timezone string used for local display time |
 | `WIFI_MANAGER_AP_NAME` | `"F1-Light-Setup"` | Config portal AP name |

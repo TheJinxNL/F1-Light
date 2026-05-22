@@ -42,12 +42,12 @@
 #define COL_DGRAY   0x2104  // dark gray — divider lines
 #define COL_LGRAY   0xC618  // light gray — secondary text
 
-// ─── Display instance (HSPI hardware SPI for speed) ──────────────────────────
-static SPIClass        g_spi(HSPI);
+// ─── Display instance (SPI2 / FSPI hardware SPI) ────────────────────────────
+static SPIClass        g_spi(FSPI);
 static Adafruit_ST7789 g_tft(&g_spi, TFT_CS, TFT_DC, TFT_RST);
 
 #if TFT_BL >= 0
-static const uint8_t TFT_BL_PWM_CHANNEL = 0;
+// No channel variable needed — Arduino ESP32 core 3.x ledcAttach() uses pin directly.
 #endif
 
 // ─── Layout constants (pixels) ────────────────────────────────────────────────
@@ -700,12 +700,12 @@ void displayShowChampionship() {
 
 void displaySetBrightness(uint8_t brightness) {
 #if TFT_BL >= 0
-  ledcWrite(TFT_BL_PWM_CHANNEL, brightness);
+  ledcWrite(TFT_BL, brightness);
 #endif
 }
 
 void displayBegin() {
-  // HSPI: SCLK, MISO (unused/-1), MOSI, CS
+  // SPI2: SCLK, MISO (unused/-1), MOSI, CS
   g_spi.begin(TFT_SCLK, -1, TFT_MOSI, TFT_CS);
   g_tft.init(TFT_WIDTH, TFT_HEIGHT);
   g_tft.setRotation(0);      // portrait, upright orientation
@@ -714,9 +714,8 @@ void displayBegin() {
 
   // Backlight PWM
 #if TFT_BL >= 0
-  ledcSetup(TFT_BL_PWM_CHANNEL, 5000, 8);   // 5 kHz, 8-bit (0-255)
-  ledcAttachPin(TFT_BL, TFT_BL_PWM_CHANNEL);
-  ledcWrite(TFT_BL_PWM_CHANNEL, TFT_BL_DEFAULT);
+  ledcAttach(TFT_BL, 5000, 8);          // pin, 5 kHz, 8-bit (0-255)
+  ledcWrite(TFT_BL, TFT_BL_DEFAULT);
   Serial.printf("[Display] Backlight on GPIO %d, brightness %d\n",
                 TFT_BL, TFT_BL_DEFAULT);
 #else

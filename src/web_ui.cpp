@@ -11,6 +11,7 @@ static Preferences g_prefs;
 static bool g_running = false;
 static bool g_prefsReady = false;
 static uint8_t g_ledBrightness = MAX_BRIGHTNESS;
+static uint8_t g_lcdBrightness = TFT_BL_DEFAULT;
 static uint8_t g_idleBatteryBars = 1;  // 1-4 = manual bars
 static bool g_trackTestMode = false;
 static uint8_t g_trackTestStatus = 1;  // 1=CLEAR,2=YELLOW,4=SC,5=RED,6=VSC,7=VSC_END,99=SESSION_FINISHED
@@ -21,6 +22,7 @@ static uint32_t g_rebootAtMs = 0;
 
 static const char* PREF_NAMESPACE = "f1light";
 static const char* PREF_LED_BRIGHT  = "ledBright";
+static const char* PREF_LCD_BRIGHT  = "lcdBright";
 static const char* PREF_IDLE_BARS   = "idleBars";
 static const char* PREF_RACE_BATT   = "raceBatt";
 
@@ -50,6 +52,10 @@ static const char kHtmlPage[] PROGMEM = R"HTML(
     <label for='b'>LED brightness</label>
     <div class='row'><span>0</span><strong id='v'>0</strong><span>255</span></div>
     <input id='b' type='range' min='0' max='255' value='0'>
+
+    <label for='lb'>LCD brightness</label>
+    <div class='row'><span>0</span><strong id='lbv'>0</strong><span>255</span></div>
+    <input id='lb' type='range' min='0' max='255' value='0'>
 
     <label for='ib'>Idle battery level</label>
     <div class='row'><span>1</span><strong id='ibv'>1</strong><span>4</span></div>
@@ -88,6 +94,8 @@ static const char kHtmlPage[] PROGMEM = R"HTML(
   <script>
     const b=document.getElementById('b');
     const v=document.getElementById('v');
+    const lb=document.getElementById('lb');
+    const lbv=document.getElementById('lbv');
     const ib=document.getElementById('ib');
     const ibv=document.getElementById('ibv');
     const rb=document.getElementById('rb');
@@ -97,6 +105,7 @@ static const char kHtmlPage[] PROGMEM = R"HTML(
 
     function syncLabels(){
       v.textContent=b.value;
+      lbv.textContent=lb.value;
       ibv.textContent=ib.value;
       tmv.textContent=(tm.value==='1'?'On':'Off');
     }
@@ -106,6 +115,7 @@ static const char kHtmlPage[] PROGMEM = R"HTML(
         const res=await fetch('/api/brightness');
         const j=await res.json();
         if (typeof j.brightness==='number') b.value=String(j.brightness);
+        if (typeof j.lcdBrightness==='number') lb.value=String(j.lcdBrightness);
         if (typeof j.idleBatteryBars==='number') ib.value=String(j.idleBatteryBars);
         if (typeof j.raceBatteryEnabled==='number') rb.checked=(j.raceBatteryEnabled!==0);
         if (typeof j.trackTestMode==='number') tm.value=String(j.trackTestMode?1:0);
@@ -115,11 +125,13 @@ static const char kHtmlPage[] PROGMEM = R"HTML(
     }
 
     b.addEventListener('input',syncLabels);
+    lb.addEventListener('input',syncLabels);
     ib.addEventListener('input',syncLabels);
     tm.addEventListener('input',syncLabels);
 
     document.getElementById('save').addEventListener('click',async()=>{
       await fetch('/api/brightness',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'value='+encodeURIComponent(b.value)});
+      await fetch('/api/lcd-brightness',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'value='+encodeURIComponent(lb.value)});
       await fetch('/api/idle-battery',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'bars='+encodeURIComponent(ib.value)});
       await fetch('/api/race-battery',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'enabled='+(rb.checked?'1':'0')});
       await fetch('/api/test-track',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'mode='+encodeURIComponent(tm.value)+'&status='+encodeURIComponent(ts.value)});
@@ -146,6 +158,7 @@ static void loadPrefsIfNeeded() {
   g_prefsReady = true;
 
   g_ledBrightness = g_prefs.getUChar(PREF_LED_BRIGHT, MAX_BRIGHTNESS);
+  g_lcdBrightness  = g_prefs.getUChar(PREF_LCD_BRIGHT, TFT_BL_DEFAULT);
   uint8_t bars = g_prefs.getUChar(PREF_IDLE_BARS, 1);
   if (bars < 1) bars = 1;
   if (bars > 4) bars = 4;
@@ -159,6 +172,7 @@ static void handleRoot() {
 
 static void handleGetBrightness() {
   String json = "{\"brightness\":" + String(g_ledBrightness)
+              + ",\"lcdBrightness\":" + String(g_lcdBrightness)
               + ",\"idleBatteryBars\":" + String(g_idleBatteryBars)
               + ",\"trackTestMode\":" + String(g_trackTestMode ? 1 : 0)
               + ",\"trackTestStatus\":" + String(g_trackTestStatus)
@@ -223,6 +237,19 @@ static void handleSetTestTrack() {
   g_server.send(200, "application/json", "{\"ok\":true}");
 }
 
+static void handleSetLcdBrightness() {
+  if (!g_server.hasArg("value")) {
+    g_server.send(400, "application/json", "{\"ok\":false,\"error\":\"missing value\"}");
+    return;
+  }
+  int v = g_server.arg("value").toInt();
+  if (v < 0) v = 0;
+  if (v > 255) v = 255;
+  g_lcdBrightness = (uint8_t)v;
+  if (g_prefsReady) g_prefs.putUChar(PREF_LCD_BRIGHT, g_lcdBrightness);
+  g_server.send(200, "application/json", "{\"ok\":true}");
+}
+
 static void handleSetRaceBattery() {
   if (!g_server.hasArg("enabled")) {
     g_server.send(400, "application/json", "{\"ok\":false,\"error\":\"missing enabled\"}");
@@ -252,6 +279,7 @@ void webUiBegin() {
   g_server.on("/api/idle-battery", HTTP_POST, handleSetIdleBattery);
   g_server.on("/api/test-track",    HTTP_GET,  handleGetTestTrack);
   g_server.on("/api/test-track",    HTTP_POST, handleSetTestTrack);
+  g_server.on("/api/lcd-brightness", HTTP_POST, handleSetLcdBrightness);
   g_server.on("/api/race-battery",  HTTP_POST, handleSetRaceBattery);
   g_server.on("/api/reboot",        HTTP_POST, handleReboot);
   g_server.onNotFound([]() {
@@ -293,6 +321,10 @@ bool webUiIsRunning() {
 
 uint8_t webUiGetLedBrightness() {
   return g_ledBrightness;
+}
+
+uint8_t webUiGetLcdBrightness() {
+  return g_lcdBrightness;
 }
 
 uint8_t webUiGetIdleBatteryBars() {

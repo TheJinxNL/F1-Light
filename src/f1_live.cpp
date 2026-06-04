@@ -217,13 +217,8 @@ static bool otaInstallFirmware(const char* firmwareUrl, const char* md5) {
     return false;
   }
 
-  if (!Update.end()) {
+  if (!Update.end(true)) {
     Serial.printf("[OTA] Update end failed (err=%u)\n", (unsigned)Update.getError());
-    return false;
-  }
-
-  if (!Update.isFinished()) {
-    Serial.println("[OTA] Update not finished");
     return false;
   }
 

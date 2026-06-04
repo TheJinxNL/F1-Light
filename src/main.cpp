@@ -50,6 +50,7 @@ void setup() {
 // ─── loop() ───────────────────────────────────────────────────────────────────
 void loop() {
   FastLED.setBrightness(webUiGetLedBrightness());
+  displaySetBrightness(webUiGetLcdBrightness());
   effectSetAutoShow(false);
   f1LiveLoop();
 
@@ -159,7 +160,6 @@ void loop() {
 
       case F1State::IDLE:
         effectIdleReset();
-        displaySetBrightness(TFT_BL_DEFAULT);
         s_idleView         = 0;
         s_lastViewSwitchMs = millis();
         s_inCountdown      = false;
@@ -175,7 +175,6 @@ void loop() {
         break;
 
       case F1State::LIVE:
-        displaySetBrightness(230);
         s_inCountdown = false;
         displayShowLive(status);
         break;

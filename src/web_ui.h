@@ -13,6 +13,9 @@ bool webUiIsRunning();
 // Current LED brightness (0-255) controlled via web UI.
 uint8_t webUiGetLedBrightness();
 
+// Current LCD backlight brightness (0-255) controlled via web UI.
+uint8_t webUiGetLcdBrightness();
+
 // Idle battery bars: fixed manual range 1-4.
 uint8_t webUiGetIdleBatteryBars();
 

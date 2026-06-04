@@ -25,7 +25,7 @@ Inspiration on how to access the F1 Live Feeds: https://github.com/Nicxe/f1_sens
 - **WiFi reset button** — hold GPIO 0 (BOOT button) at power-on to wipe credentials and re-configure
 - **Dimmable backlight** — reduced brightness at idle, full brightness during a live session
 - **Auto-reconnect** with exponential back-off on SignalR disconnect
-- **Web settings UI** — browser-accessible settings page (LED brightness, idle battery level, race battery animation toggle, test mode, reboot) with persistent NVS storage; URL shown on display at boot
+- **Web settings UI** — browser-accessible settings page (LED brightness, LCD backlight brightness, idle battery level, race battery animation toggle, test mode, reboot) with persistent NVS storage; URL shown on display at boot
 - **Track status test mode** — trigger any flag condition or the session-finished animation directly from the web UI without waiting for a live session
 - **Boot-time OTA check** — checks a remote manifest, installs newer firmware, and reboots automatically
 - **OTA status screen** — shows OTA check / download / install progress on the TFT during boot
@@ -201,13 +201,13 @@ All constants live in [src/config.h](src/config.h):
 | `MAX_BRIGHTNESS` | 200 | LED brightness cap (0–255); overridden at runtime via web UI |
 | `DIM_BRIGHTNESS` | 50 | Reduced LED brightness used for secondary/dim states |
 | `IDLE_BASE_RED` | 180 | Red channel level (0–255) for all LEDs in idle state |
-| `TFT_BL_DEFAULT` | 200 | Backlight brightness at idle (0–255) |
+| `TFT_BL_DEFAULT` | 200 | Default backlight brightness (0–255); overridden at runtime via web UI |
 | `DISPLAY_TZ_POSIX` | `"CET-1CEST,M3.5.0,M10.5.0/3"` | POSIX timezone string used for local display time |
 | `WIFI_MANAGER_AP_NAME` | `"F1-Light-Setup"` | Config portal AP name |
 | `WIFI_MANAGER_TIMEOUT` | 180 | Portal auto-close timeout (seconds) |
 | `WIFI_RESET_PIN` | 0 | GPIO held LOW at boot to reset WiFi credentials |
 | `F1_POLL_INTERVAL_MS` | 60000 | How often to poll the F1 schedule (ms) |
-| `FW_VERSION` | `"1.0.12"` | Current firmware version used for OTA comparison |
+| `FW_VERSION` | `"1.0.14"` | Current firmware version used for OTA comparison |
 | `OTA_BOOT_CHECK_ENABLED` | 1 | Enable/disable boot-time OTA check |
 | `OTA_MANIFEST_URL` | `"https://www.jinx.nl/f1-light/update/manifest.json"` | Remote OTA manifest URL |
 | `OTA_MANIFEST_TIMEOUT_MS` | 7000 | Manifest request timeout (ms) |
@@ -228,6 +228,7 @@ Open `http://<device-ip>/` in a browser to access the settings page:
 | Setting | Description |
 |---------|-------------|
 | **LED Brightness** | Slider (0–255). Applies immediately; persisted across reboots. |
+| **LCD Brightness** | Slider (0–255). Controls TFT backlight PWM. Applies immediately; persisted across reboots. |
 | **Idle Battery Level** | Fixed range `1–4`; shows that many bars with the top bar pulsing. Only used when battery animation is on. Persisted. |
 | **Race Battery Animation** | Checkbox. On: battery drains over race duration (idle: configured bars with pulse). Off: static full battery (4 bars, no pulse) in both idle and race. Persisted. |
 | **Track Test Mode** | Toggle on to override live data with a chosen track status for previewing effects. Not persisted. |
